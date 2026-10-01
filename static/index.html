@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pragna AI — Free AI Voice Agent Preview</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#0F172A; --ink:#1E293B; --muted:#64748B; --line:#E2E8F0; --bg:#F6F9FF; --card:#FFFFFF;
+    --blue:#2563EB; --blue2:#3396F5; --cyan:#45C9FD;
+    --grad:linear-gradient(135deg,#2563EB 0%,#3396F5 55%,#45C9FD 100%);
+    --ok:#16A34A; --err:#DC2626;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{font-family:"Plus Jakarta Sans",system-ui,sans-serif;color:var(--ink);min-height:100vh;
+       background:radial-gradient(900px 500px at 90% -10%,#45C9FD22,transparent),radial-gradient(700px 400px at -10% 10%,#2563EB14,transparent),var(--bg)}
+  .hidden{display:none!important}
+  header{max-width:1080px;margin:0 auto;padding:18px 16px;display:flex;align-items:center;justify-content:space-between}
+  header img{height:30px}
+  header .tag{font-size:12px;font-weight:700;color:var(--blue);background:#2563EB12;border:1px solid #2563EB2a;padding:6px 10px;border-radius:999px}
+  .wrap{max-width:560px;margin:0 auto;padding:12px 16px 60px}
+  h1{font-size:32px;line-height:1.15;margin:10px 0 10px;font-weight:800;letter-spacing:-.02em;color:var(--navy)}
+  h1 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  p.sub{color:var(--muted);margin:0 0 22px;line-height:1.6;font-size:16px}
+  .perks{list-style:none;padding:0;margin:0 0 26px;display:grid;gap:12px}
+  .perks li{display:flex;gap:10px;align-items:center;color:var(--ink);font-size:15px}
+  .perks li::before{content:"✓";width:22px;height:22px;border-radius:50%;background:var(--grad);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:800;flex:none}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px;box-shadow:0 10px 40px #0f172a0d}
+  .btn{width:100%;margin-top:18px;padding:16px;border:0;border-radius:14px;font:700 16px "Plus Jakarta Sans",sans-serif;color:#fff;cursor:pointer;background:var(--grad);
+       box-shadow:0 12px 30px #2563EB40;display:flex;align-items:center;justify-content:center;gap:10px;text-decoration:none}
+  .btn:disabled{opacity:.6} .btn.alt{background:#fff;border:1px solid var(--line);box-shadow:none;color:var(--navy)}
+  label{display:block;font-size:13px;font-weight:700;margin:14px 0 6px;color:var(--navy)} label:first-of-type{margin-top:0}
+  input{width:100%;padding:14px;border-radius:12px;border:1px solid var(--line);background:#F8FAFC;color:var(--navy);font:500 16px "Plus Jakarta Sans",sans-serif;outline:none}
+  input:focus{border-color:var(--blue2);background:#fff;box-shadow:0 0 0 4px #3396F51f}
+  .err{color:var(--err);font-size:14px;margin-top:12px;display:none;line-height:1.45}
+  /* form sheet */
+  .sheet-bg{position:fixed;inset:0;background:#0f172a66;backdrop-filter:blur(4px);z-index:60;display:flex;align-items:flex-end;justify-content:center}
+  .sheet{width:100%;max-width:560px;max-height:92vh;overflow:auto;border-radius:22px 22px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom));animation:up .25s ease}
+  @keyframes up{from{transform:translateY(40px);opacity:0}}
+  .sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+  .sheet-head h2{margin:0;font-size:19px;color:var(--navy)} .x{background:none;border:0;color:var(--muted);font-size:28px;cursor:pointer;line-height:1}
+  .grab{width:44px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 14px}
+  @media(min-width:768px){.sheet-bg{align-items:center}.sheet{border-radius:22px}}
+  /* progress */
+  .progress{text-align:center;padding:34px 22px}
+  .progress img{width:56px;height:56px;animation:float 2s ease-in-out infinite}
+  @keyframes float{50%{transform:translateY(-6px)}}
+  .progress h3{margin:16px 0 6px;color:var(--navy);font-size:20px}
+  .progress p{margin:0 0 20px;color:var(--muted);font-size:14px}
+  .bar{height:12px;border-radius:99px;background:#E8EEF8;overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--grad);border-radius:99px;transition:width .25s linear}
+  .pct{margin-top:10px;font-weight:800;color:var(--blue);font-size:14px}
+  /* phone mock-up */
+  .stage{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .stage-title{text-align:center;color:var(--muted);font-size:14px;margin:0}
+  .stage-title b{color:var(--navy)}
+  .phone{position:relative;width:380px;max-width:100%;height:780px;border-radius:52px;background:#0F172A;padding:12px;box-shadow:0 30px 80px #0f172a40,inset 0 0 0 2px #334155}
+  .phone::before{content:"";position:absolute;top:22px;left:50%;transform:translateX(-50%);width:110px;height:28px;border-radius:20px;background:#0F172A;z-index:5}
+  .screen{position:relative;width:100%;height:100%;border-radius:42px;overflow:hidden;background:#fff}
+  .site{position:absolute;top:96px;left:0;right:0;bottom:0;overflow-y:auto;scrollbar-width:none}
+  .screen::after{content:"";position:absolute;top:0;left:0;right:0;height:96px;background:#F1F5F9;z-index:3}
+  .site::-webkit-scrollbar{display:none}
+  .site img{width:100%;display:block}
+  .site .fake{height:100%;background:var(--grad);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:30px;text-align:center}
+  .site .fake img{width:72px;height:72px;border-radius:18px;background:#fff;padding:8px}
+  .site .fake h4{margin:0;font-size:24px}
+  .urlbar{position:absolute;top:58px;left:14px;right:14px;z-index:4;background:#ffffffe6;backdrop-filter:blur(8px);border-radius:12px;padding:8px 12px;font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;box-shadow:0 2px 10px #0f172a1a;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  /* agent widget inside phone */
+  .widget{position:absolute;left:10px;right:10px;bottom:10px;z-index:6;background:#fff;border-radius:26px;box-shadow:0 -6px 40px #0f172a33;padding:16px;max-height:72%;overflow-y:auto;scrollbar-width:none}
+  .widget::-webkit-scrollbar{display:none}
+  .w-head{display:flex;gap:12px;align-items:center}
+  .w-logo{width:46px;height:46px;border-radius:14px;background:var(--grad);display:grid;place-items:center;color:#fff;font-weight:800;font-size:20px;flex:none;overflow:hidden;border:1px solid var(--line)}
+  .w-logo img{width:100%;height:100%;object-fit:contain;background:#fff}
+  .w-name{font-weight:800;color:var(--navy);font-size:16px;line-height:1.2}
+  .w-status{font-size:12px;color:var(--ok);display:flex;align-items:center;gap:6px;font-weight:600}
+  .w-status::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px #16a34a22}
+  .w-desc{font-size:13px;color:#475569;line-height:1.5;margin:12px 0 0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .chips{display:flex;gap:6px;overflow-x:auto;margin-top:10px;padding-bottom:2px;scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{font-size:12px;padding:6px 10px;border-radius:999px;background:#EFF6FF;color:var(--blue);font-weight:600;white-space:nowrap;flex:none}
+  .w-contact{margin-top:10px;display:grid;gap:4px;font-size:12px;color:#475569}
+  .bubble{margin-top:12px;background:#F1F5F9;border-radius:16px 16px 16px 4px;padding:10px 12px;font-size:13px;color:var(--ink);line-height:1.45}
+  .talk{margin-top:14px;display:flex;flex-direction:column;align-items:center;gap:8px;position:sticky;bottom:-16px;background:#fff;padding:10px 0 8px;z-index:2}
+  .mic-btn{width:74px;height:74px;border-radius:50%;border:0;cursor:pointer;background:var(--grad);color:#fff;display:grid;place-items:center;position:relative;box-shadow:0 12px 28px #2563EB55}
+  .mic-btn svg{width:30px;height:30px}
+  .mic-btn::after{content:"";position:absolute;inset:-8px;border-radius:50%;border:3px solid #3396F555;animation:ring 1.8s infinite}
+  .mic-btn.live{background:linear-gradient(135deg,#16A34A,#22C55E);box-shadow:0 12px 28px #16A34A55}
+  .mic-btn.live::after{border-color:#22C55E66}
+  @keyframes ring{0%{transform:scale(.92);opacity:1}100%{transform:scale(1.18);opacity:0}}
+  .talk-label{font-weight:800;color:var(--navy);font-size:14px}
+  .talk-status{font-size:12px;color:var(--muted);text-align:center;line-height:1.45;min-height:16px}
+  .talk-status.bad{color:var(--err)} .talk-status.good{color:var(--ok)}
+  .powered{margin-top:12px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:#94A3B8}
+  .powered img{height:14px}
+  .warn{max-width:380px;padding:12px 14px;border-radius:14px;background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;font-size:13px;line-height:1.45}
+  .links{display:flex;gap:10px;width:100%;max-width:380px} .links .btn{margin-top:0}
+  footer{text-align:center;color:#94A3B8;font-size:12px;padding:10px 0 30px}
+  footer img{height:16px;vertical-align:middle;margin-left:4px}
+  /* real phones: drop the bezel, use the whole screen */
+  @media(max-width:480px){
+    .wrap{padding:6px 12px 40px}
+    header{padding:12px 14px} header img{height:24px}
+    #result{gap:8px}
+    .phone{width:100%;height:calc(100svh - 110px);min-height:560px;border-radius:30px;padding:0;background:none;box-shadow:0 20px 50px #0f172a26}
+    .phone::before{display:none}
+    .screen{border-radius:30px}
+    .urlbar{top:10px}
+    .site{top:52px} .screen::after{height:52px}
+    h1{font-size:28px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <img src="/static/pragna-logo.png" alt="Pragna AI">
+  <span class="tag">Free preview</span>
+</header>
+
+<main class="wrap">
+  <!-- 1. LANDING -->
+  <section id="landing">
+    <h1>Hear <span>your own AI voice agent</span> talk about your business</h1>
+    <p class="sub">Enter your website. In about 25 seconds Pragna AI learns your company and you can talk to your agent live — right inside a preview of your own site.</p>
+    <ul class="perks">
+      <li>Learns your services, hours &amp; FAQs from your website</li>
+      <li>Talks live in the browser — no app, no phone call</li>
+      <li>Answers visitors 24/7, qualifies leads and books meetings</li>
+    </ul>
+    <button class="btn" id="openForm" type="button">Build my free AI agent →</button>
+  </section>
+
+  <!-- 3. PROGRESS (single bar) -->
+  <section id="progress" class="card progress hidden">
+    <img src="/static/pragna-icon.png" alt="">
+    <h3>Building your AI voice agent…</h3>
+    <p>This takes about 25 seconds</p>
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="pct" id="pct">0%</div>
+  </section>
+</main>
+
+<!-- 4. RESULT: phone preview with the agent widget inside -->
+<section id="result" class="stage hidden" style="padding:0 12px 30px">
+  <p class="stage-title">Your AI agent, live on <b id="siteName"></b></p>
+  <div class="phone">
+    <div class="screen">
+      <div class="urlbar">🔒 <span id="urlText"></span></div>
+      <div class="site" id="site"></div>
+
+      <div class="widget">
+        <div class="w-head">
+          <div class="w-logo" id="wLogo"></div>
+          <div><div class="w-name" id="wName"></div><div class="w-status">AI Agent · Online</div></div>
+        </div>
+        <p class="w-desc" id="wDesc"></p>
+        <div class="chips" id="wServices"></div>
+        <div class="w-contact" id="wContact"></div>
+        <div class="bubble" id="wWelcome"></div>
+        <div class="talk">
+          <button class="mic-btn" id="talkBtn" type="button" aria-label="Talk to our AI agent">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
+          </button>
+          <div class="talk-label" id="talkLabel">Tap to talk to our AI agent</div>
+          <div class="talk-status" id="talkStatus">Allow the microphone when asked.</div>
+        </div>
+        <div class="powered">Powered by <img src="/static/pragna-logo.png" alt="Pragna AI"></div>
+      </div>
+    </div>
+  </div>
+  <div class="warn hidden" id="warn"></div>
+  <div class="links"><button class="btn alt" id="restart" type="button">Try another website</button></div>
+</section>
+
+<footer>© Pragna AI <img src="/static/pragna-icon.png" alt=""></footer>
+
+<!-- 2. FORM (bottom sheet) -->
+<div class="sheet-bg hidden" id="sheet">
+  <form class="sheet card" id="form" autocomplete="on">
+    <div class="grab"></div>
+    <div class="sheet-head"><h2>Build my free AI agent</h2><button class="x" type="button" id="closeForm" aria-label="Close">×</button></div>
+    <label for="name">Your name *</label>
+    <input id="name" name="name" required placeholder="Srinivas Reddy" autocomplete="name">
+    <label for="company">Company name</label>
+    <input id="company" name="company" placeholder="Acme Dental" autocomplete="organization">
+    <label for="website">Company website *</label>
+    <input id="website" name="website" required inputmode="url" placeholder="www.yourcompany.com" autocomplete="url">
+    <label for="email">Email *</label>
+    <input id="email" name="email" type="email" required placeholder="you@company.com" autocomplete="email">
+    <label for="phone">Phone</label>
+    <input id="phone" name="phone" type="tel" placeholder="+91 98xxxxxxxx" autocomplete="tel">
+    <button class="btn" id="submitBtn" type="submit">Build my AI agent →</button>
+    <div class="err" id="err"></div>
+  </form>
+</div>
+
+<script>
+const API = "";                       // same origin. If backend is hosted elsewhere: "https://api.yourdomain.com"
+const PROGRESS_SECONDS = 25;          // length of the progress bar
+const DEFAULT_WIDGET_ID = "6abdf6d0b9739b959264b321";
+const $ = id => document.getElementById(id);
+const txt = (el, s) => { el.textContent = s; return el; };
+let CFG = {widgetId: DEFAULT_WIDGET_ID, agentPhone: ""};
+fetch(API + "/api/config").then(r => r.json()).then(c => CFG = {...CFG, ...c, widgetId: c.widgetId || DEFAULT_WIDGET_ID}).catch(() => {});
+
+/* ---------- form sheet ---------- */
+const openSheet = () => { $("sheet").classList.remove("hidden"); setTimeout(() => $("name").focus(), 250); };
+const closeSheet = () => $("sheet").classList.add("hidden");
+$("openForm").onclick = openSheet;
+$("closeForm").onclick = closeSheet;
+$("sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeSheet(); });
+
+/* ---------- 25-second progress bar; real work runs in the background ---------- */
+function runProgress(seconds){
+  const start = performance.now();
+  let done = false, timer;
+  const set = p => { $("barFill").style.width = p + "%"; txt($("pct"), Math.floor(p) + "%"); };
+  const tick = () => {
+    const t = (performance.now() - start) / 1000;
+    let p = Math.min(95, (t / seconds) * 95);             // holds at 95% if the server is still working
+    if (done) p = 100;
+    set(p);
+    if (!done) timer = requestAnimationFrame(tick);
+  };
+  set(0); tick();
+  return {
+    elapsed: () => (performance.now() - start) / 1000,
+    finish: () => { done = true; cancelAnimationFrame(timer); set(100); }
+  };
+}
+
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  $("err").style.display = "none";
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  closeSheet(); $("landing").classList.add("hidden"); $("progress").classList.remove("hidden");
+  window.scrollTo(0, 0);
+  const prog = runProgress(PROGRESS_SECONDS);
+  try {
+    const r = await fetch(API + "/api/train", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Something went wrong, please try again.");
+    loadGhlWidget();                                         // agent is trained -> load the voice widget
+    const wait = PROGRESS_SECONDS - prog.elapsed();          // always show the full 25 s bar
+    if (wait > 0) await new Promise(res => setTimeout(res, wait * 1000));
+    prog.finish();
+    await new Promise(res => setTimeout(res, 400));
+    showCompany(data);
+  } catch (ex) {
+    prog.finish();
+    $("progress").classList.add("hidden"); $("landing").classList.remove("hidden");
+    openSheet(); $("err").textContent = ex.message; $("err").style.display = "block";
+  }
+});
+
+function showCompany(d){
+  const c = d.company;
+  const host = new URL(c.website).hostname.replace(/^www\./, "");
+  txt($("siteName"), host);
+  txt($("urlText"), host);
+  txt($("wName"), c.company_name);
+  txt($("wDesc"), c.description || "");
+
+  // logo: site favicon, fallback to initial
+  const initial = (c.company_name || "?").trim()[0].toUpperCase();
+  const logo = $("wLogo"); txt(logo, initial);
+  const img = new Image();
+  img.onload = () => { if (img.naturalWidth > 16) { logo.innerHTML = ""; logo.appendChild(img); } };
+  img.src = "https://www.google.com/s2/favicons?sz=128&domain=" + encodeURIComponent(host);
+
+  // the company's own site as the phone background
+  const site = $("site"); site.innerHTML = "";
+  if (d.screenshot) {
+    const s = new Image(); s.src = d.screenshot; s.alt = host; site.appendChild(s);
+  } else {
+    const f = document.createElement("div"); f.className = "fake";
+    const fi = new Image(); fi.src = img.src; f.appendChild(fi);
+    f.appendChild(txt(document.createElement("h4"), c.company_name));
+    f.appendChild(txt(document.createElement("div"), host));
+    site.appendChild(f);
+  }
+
+  const services = (c.services || []).filter(s => s.length <= 40).slice(0, 8);
+  $("wServices").innerHTML = "";
+  services.forEach(s => $("wServices").appendChild(txt(Object.assign(document.createElement("span"), {className: "chip"}), s)));
+  $("wServices").classList.toggle("hidden", !services.length);
+
+  const rows = [...(c.phones||[]).slice(0,1).map(x => "📞 " + x), ...(c.emails||[]).slice(0,1).map(x => "✉️ " + x),
+                ...(c.hours||[]).slice(0,1).map(x => "🕘 " + x)];
+  $("wContact").innerHTML = "";
+  rows.forEach(r => $("wContact").appendChild(txt(document.createElement("div"), r)));
+
+  txt($("wWelcome"), d.welcomeMessage);
+
+  const updated = d.agentStatus === "updated";
+  $("warn").classList.toggle("hidden", updated);
+  if (!updated) txt($("warn"), "⚠ The GHL agent was NOT updated (" + d.agentStatus + "). It will not know this company. " +
+                               "Check GHL_API_KEY, GHL_LOCATION_ID and GHL_AGENT_ID in .env and restart the server.");
+
+  setTalk("idle");
+  $("progress").classList.add("hidden"); $("result").classList.remove("hidden");
+  window.scrollTo(0, 0);
+}
+
+/* ---------- talk button state (inside the phone widget) ---------- */
+function setTalk(state, msg){
+  const btn = $("talkBtn"), st = $("talkStatus");
+  btn.classList.toggle("live", state === "live");
+  btn.disabled = state === "connecting";
+  st.className = "talk-status" + (state === "error" ? " bad" : state === "live" ? " good" : "");
+  const labels = {idle: "Tap to talk to our AI agent", connecting: "Connecting…", live: "You're live — start speaking", error: "Tap to try again"};
+  txt($("talkLabel"), labels[state] || labels.idle);
+  txt(st, msg || (state === "idle" ? "Allow the microphone when asked." : ""));
+}
+
+/* ---------- GHL Voice AI widget ---------- */
+// Watch the widget's own "start call" request so we can show the real result.
+(function watchVoiceCalls(){
+  const orig = window.fetch;
+  window.fetch = async (...args) => {
+    const url = String((args[0] && args[0].url) || args[0] || "");
+    const res = await orig(...args);
+    if (url.includes("start-voice-ai-call")) {
+      let msg = "";
+      if (res.status >= 400) { try { msg = JSON.stringify((await res.clone().json()).message); } catch (e) {} }
+      console.log("[voice-demo] start-voice-ai-call", res.status, url, msg);
+      if (res.status >= 400) {
+        const noAgent = /\/undefined$/.test(url) || /agentId/i.test(msg);
+        setTalk("error", noAgent
+          ? "The voice widget has no agent selected in GHL (Sites → Chat Widget → choose your Voice AI agent)."
+          : "Call refused (" + res.status + "): " + msg);
+      } else {
+        setTalk("live", "Connected — say hello! The agent knows your company.");
+      }
+    }
+    return res;
+  };
+})();
+
+let widgetPromise = null;
+function loadGhlWidget(){
+  if (widgetPromise) return widgetPromise;
+  widgetPromise = new Promise(res => {
+    window.addEventListener("LC_chatWidgetLoaded", () => res(true), {once: true});
+    const s = document.createElement("script");
+    s.src = "https://widgets.leadconnectorhq.com/loader.js";
+    s.setAttribute("data-resources-url", "https://widgets.leadconnectorhq.com/chat-widget/loader.js");
+    s.setAttribute("data-widget-id", CFG.widgetId || DEFAULT_WIDGET_ID);
+    s.onerror = () => res(false);
+    document.body.appendChild(s);
+    setTimeout(() => res(!!(window.leadConnector && window.leadConnector.chatWidget)), 12000);
+  });
+  return widgetPromise;
+}
+
+// GHL Voice AI widget: <chat-widget> shadow DOM contains
+//   <div class="lc_text-widget--phone-icon" aria-label="Select to start the voice call">
+const START_SELECTORS = [
+  '.lc_text-widget--phone-icon',
+  '[aria-label*="start the voice call" i]',
+  '[aria-label*="start" i][aria-label*="call" i]',
+  '.widget-open-icon'
+];
+function findStartButton(root = document){
+  for (const sel of START_SELECTORS) { const el = root.querySelector(sel); if (el) return el; }
+  for (const el of root.querySelectorAll("*")) if (el.shadowRoot) { const f = findStartButton(el.shadowRoot); if (f) return f; }
+  return null;
+}
+function pressEl(el){
+  const o = {bubbles: true, composed: true, cancelable: true, view: window};
+  ["pointerdown","mousedown","pointerup","mouseup","click"].forEach(t =>
+    el.dispatchEvent(new (t.startsWith("pointer") ? PointerEvent : MouseEvent)(t, o)));
+}
+async function autoStartCall(){
+  for (let i = 0; i < 40; i++) {                         // ~8 s while the widget renders
+    const b = findStartButton();
+    if (b) { pressEl(b); console.log("[voice-demo] pressed GHL start-call button"); return true; }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  console.warn("[voice-demo] GHL start-call button not found");
+  return false;
+}
+
+$("talkBtn").addEventListener("click", async () => {
+  setTalk("connecting", "Allow the microphone when asked.");
+  try {                                                   // mic permission inside the tap (iOS / Android)
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    stream.getTracks().forEach(t => t.stop());
+  } catch (e) {
+    setTalk("error", "Microphone is blocked — allow it in your browser settings and tap again."); return;
+  }
+  const ok = await loadGhlWidget();
+  const w = window.leadConnector && window.leadConnector.chatWidget;
+  if (ok || w) {
+    const started = await autoStartCall();
+    if (!started) {
+      if (w && typeof w.openWidget === "function") w.openWidget();
+      if (CFG.agentPhone) { location.href = "tel:" + CFG.agentPhone.replace(/[^\d+]/g, ""); return; }
+      setTalk("error", "Couldn't start the call automatically — tap \"Call us here\" at the bottom of the page.");
+      return;
+    }
+    // if GHL doesn't answer within 10 s, tell the user what to do
+    setTimeout(() => { if ($("talkLabel").textContent === "Connecting…")
+      setTalk("error", "No answer from the voice service — tap \"Call us here\" at the bottom of the page."); }, 10000);
+    return;
+  }
+  if (CFG.agentPhone) { location.href = "tel:" + CFG.agentPhone.replace(/[^\d+]/g, ""); return; }
+  setTalk("error", "Couldn't load the voice agent. Check your connection and try again.");
+});
+
+$("restart").addEventListener("click", () => {
+  $("result").classList.add("hidden"); $("warn").classList.add("hidden");
+  $("landing").classList.remove("hidden"); $("form").reset(); window.scrollTo(0, 0);
+});
+</script>
+</body>
+</html>

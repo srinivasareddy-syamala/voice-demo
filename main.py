@@ -49,15 +49,29 @@ def config():
 @app.post("/api/train")
 async def train(req: TrainRequest):
     t0 = time.time()
+    visitor = req.model_dump()
+
+    # 1) save the form to GHL straight away - the lead is kept even if the website can't be read
+    contact_task = asyncio.create_task(
+        ghl.upsert_contact(visitor, req.company, req.website) if ghl.configured() else asyncio.sleep(0))
+
+    async def note(text: str):
+        contact = await contact_task
+        if isinstance(contact, dict) and contact.get("id"):
+            await ghl.add_note(contact["id"], text)
+        return contact
+
+    form_lines = (f"Name: {req.name}\nEmail: {req.email or '-'}\nPhone: {req.phone or '-'}\n"
+                  f"Company: {req.company or '-'}\nWebsite: {req.website}")
+
+    # 2) read the company website
     try:
         data = await scrape_company(req.website, req.company)
+        if not (data["about"] or data["services"] or data["highlights"] or data["description"]):
+            raise ValueError("Website loaded but no readable text was found.")
     except ValueError as e:
+        await note(f"Pragna AI voice demo request - website could NOT be read\n\n{form_lines}\n\nReason: {e}")
         raise HTTPException(400, str(e))
-    if not (data["about"] or data["services"] or data["highlights"] or data["description"]):
-        raise HTTPException(422, "Website loaded but no readable text was found. "
-                                 "If it is a JavaScript site, install Playwright on the server.")
-
-    visitor = req.model_dump()
     prompt = build_agent_prompt(data, visitor)
     welcome = build_welcome(data, visitor)
 
@@ -74,7 +88,16 @@ async def train(req: TrainRequest):
                 return f"error: {e}"
 
     async def save_contact():
-        return await ghl.upsert_contact(visitor, data) if ghl.configured() else None
+        if not ghl.configured():
+            return None
+        services = ", ".join(data["services"][:10]) or "-"
+        return await note(
+            f"Pragna AI voice demo request\n\n{form_lines}\n\n"
+            f"Scraped company: {data['company_name']} ({data['website']})\n"
+            f"Description: {data.get('description') or '-'}\n"
+            f"Services: {services}\n"
+            f"Phones: {', '.join(data['phones']) or '-'} | Emails: {', '.join(data['emails']) or '-'}\n"
+            f"Pages read: {len(data['pages_scraped'])}")
 
     agent_status, contact, shot = await asyncio.gather(
         update_agent(), save_contact(), mobile_screenshot(data["website"]))

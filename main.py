@@ -42,6 +42,13 @@ class TrainRequest(BaseModel):
     consent: bool = False
 
 
+try:                                   # can this server take its own screenshots (headless Chrome)?
+    import playwright  # noqa: F401
+    OWN_SCREENSHOTS = True
+except ImportError:
+    OWN_SCREENSHOTS = False
+
+
 def thum_prefix() -> str:
     """thum.io screenshot URL prefix; the site URL is appended to it.
     Free tier = desktop layout. With a paid key (THUM_IO_AUTH=<id>-<secret>) we ask for a phone-width render."""
@@ -63,27 +70,35 @@ FRAME_HTML = """<!doctype html>
   #fallback{display:none;min-height:100vh;background:linear-gradient(135deg,#2563EB,#45C9FD);color:#fff;
             flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center}
   #fallback h1{margin:0;font-size:22px} #fallback p{margin:0;opacity:.9;font-size:13px}
+  #fallback img{width:76px;height:76px;border-radius:18px;background:#fff;padding:8px;display:block;margin-bottom:6px}
 </style></head>
 <body>
 <div id="wait">Loading your website…</div>
 <img id="shot" alt="" style="display:none">
-<div id="fallback"><h1>__NAME__</h1><p>__HOST__</p></div>
+<div id="fallback"><img src="https://www.google.com/s2/favicons?sz=128&domain=__HOST__" alt="" onerror="this.style.display='none'"><h1>__NAME__</h1><p>__HOST__</p></div>
 <script>
-  // 1) their website: thum.io screenshot -> our own screenshot -> simple branded card
+  // 1) their website. Order depends on what the server managed to capture:
+  //    own   = our own phone-layout screenshot (waits for "checking your browser" pages), then thum.io
+  //    thum  = thum.io screenshot, then our own
+  //    card  = the site blocks screenshots -> simple branded card
   (function () {
     var img = document.getElementById("shot"), wait = document.getElementById("wait");
     var own = ""; try { own = sessionStorage.getItem("pv_shot") || ""; } catch (e) {}
-    var tried = false;
-    function show() { wait.style.display = "none"; img.style.display = "block"; }
-    function fail() {
-      if (!tried && own) { tried = true; img.src = own; return; }
+    var thum = "__THUM__", mode = "__MODE__";
+    var queue = mode === "card" ? [] : mode === "own" ? [own, thum] : [thum, own];
+    queue = queue.filter(function (u) { return !!u; });
+    function card() {
       wait.style.display = "none"; img.style.display = "none";
       document.getElementById("fallback").style.display = "flex";
     }
-    img.onload = function () { if (img.naturalWidth < 50) return fail(); show(); };
-    img.onerror = fail;
-    img.src = "__THUM__";
-    setTimeout(function () { if (img.style.display === "none" && !tried) fail(); }, 20000);
+    function next() { if (!queue.length) return card(); img.src = queue.shift(); }
+    img.onload = function () {
+      if (img.naturalWidth < 50) return next();
+      wait.style.display = "none"; img.style.display = "block";
+    };
+    img.onerror = next;
+    next();
+    setTimeout(function () { if (img.style.display === "none" && document.getElementById("fallback").style.display !== "flex") next(); }, 20000);
   })();
   // 2) tell the page outside the phone what the voice call is doing
   (function () {
@@ -113,7 +128,7 @@ FRAME_HTML = """<!doctype html>
 
 
 @app.get("/preview-frame", response_class=HTMLResponse)
-def preview_frame(site: str = "", name: str = ""):
+def preview_frame(site: str = "", name: str = "", mode: str = "thum"):
     """The page shown INSIDE the phone: a screenshot of the visitor's website with the GHL chat widget on top."""
     from html import escape
     from urllib.parse import urlparse
@@ -122,6 +137,7 @@ def preview_frame(site: str = "", name: str = ""):
         raise HTTPException(400, "Invalid website address")
     html = (FRAME_HTML
             .replace("__THUM__", escape(thum_prefix() + site.strip(), quote=True))
+            .replace("__MODE__", mode if mode in ("own", "thum", "card") else "thum")
             .replace("__NAME__", escape(name[:80] or p.netloc))
             .replace("__HOST__", escape(p.netloc))
             .replace("__WIDGET__", WIDGET_ID)
@@ -137,6 +153,7 @@ def config():
         "widgetId": WIDGET_ID,
         "whatsapp": os.getenv("WHATSAPP_NUMBER", "+44 7446 952720"),
         "thumPrefix": thum_prefix(),
+        "ownScreenshots": OWN_SCREENSHOTS,
         "agentPhone": os.getenv("GHL_AGENT_PHONE", ""),
         "ghlConfigured": ghl.configured(),
     }
@@ -216,6 +233,7 @@ async def train(req: TrainRequest):
         "promptChars": len(prompt),
         "contact": contact,
         "screenshot": preview.get("screenshot"),
+        "previewBlocked": bool(preview.get("blocked")),
         "theme": theme,
     }
 

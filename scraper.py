@@ -131,22 +131,63 @@ def _url_variants(url: str) -> list[str]:
     return out
 
 
+# Interstitial pages some hosts (Hostinger, Cloudflare, Sucuri...) show to automated visitors for a few seconds
+CHALLENGE_RE = re.compile(
+    r"checking your browser|just a moment|verif(y|ying) (that )?you are (a )?human|attention required|"
+    r"ddos protection|please wait up to \d+ seconds|enable javascript and cookies|security check|"
+    r"one more step|access denied|are you a robot", re.I)
+STEALTH_JS = "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+CHROME_ARGS = ["--disable-blink-features=AutomationControlled"]
+
+
+async def _settle(page, max_s: float = 16.0) -> bool:
+    """Wait until any anti-bot check has finished and the real page is showing.
+    Returns False if the check page is still there after max_s seconds."""
+    import time
+    start = time.monotonic()
+    while True:
+        info = None
+        try:
+            info = await page.evaluate(
+                "() => { const t = document.body ? document.body.innerText : '';"
+                " return {title: document.title || '', head: t.slice(0, 1500), n: t.length}; }")
+        except Exception:
+            pass                                    # the check page is reloading into the real page
+        elapsed = time.monotonic() - start
+        if info:
+            challenge = info["n"] < 1500 and bool(CHALLENGE_RE.search(info["title"] + " " + info["head"]))
+            if not challenge and (info["n"] >= 80 or elapsed > 4):
+                return True
+            if challenge and elapsed > max_s:
+                return False
+        elif elapsed > max_s:
+            return False
+        await page.wait_for_timeout(700)
+
+
 async def _render_js(url: str) -> str | None:
-    """Fallback for JS-only sites (React/Wix/etc). Needs: pip install playwright && playwright install chromium"""
+    """Fallback for JS-only sites (React/Wix/etc) and sites that show a browser check first."""
     try:
         from playwright.async_api import async_playwright
     except ImportError:
         return None
     try:
         async with async_playwright() as p:
-            b = await p.chromium.launch()
-            page = await b.new_page(user_agent=UA)
-            resp = await page.goto(url, wait_until="networkidle", timeout=30000)
-            html = await page.content()
-            await b.close()
-            if resp is not None and resp.status >= 400:   # don't treat an error/block page as content
-                return None
-            return html
+            b = await p.chromium.launch(args=CHROME_ARGS)
+            ctx = await b.new_context(user_agent=UA, locale="en-GB", viewport={"width": 1366, "height": 900})
+            await ctx.add_init_script(STEALTH_JS)
+            page = await ctx.new_page()
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                if not await _settle(page):
+                    return None                     # still on a block / check page
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+                return await page.content()
+            finally:
+                await b.close()
     except Exception:
         return None
 
@@ -509,11 +550,12 @@ THEME_JS = r"""
 """
 
 
-async def mobile_preview(url: str, timeout_s: int = 20) -> dict:
-    """Phone-sized screenshot of the company site (base64 JPEG) + the brand colours actually
-    rendered on it. Uses headless Chrome. Returns {"screenshot": None, "theme": None} if unavailable."""
+async def mobile_preview(url: str, timeout_s: int = 30) -> dict:
+    """Phone-layout screenshot of the company site (base64 JPEG) + the brand colours rendered on it.
+    Uses our own headless Chrome, which waits for "checking your browser" pages to finish.
+    Returns {"screenshot": None, "theme": None, "blocked": bool, "available": bool}."""
     import base64
-    empty = {"screenshot": None, "theme": None}
+    empty = {"screenshot": None, "theme": None, "blocked": False, "available": False}
     try:
         from playwright.async_api import async_playwright
     except ImportError:
@@ -521,34 +563,47 @@ async def mobile_preview(url: str, timeout_s: int = 20) -> dict:
 
     async def _shot():
         async with async_playwright() as p:
-            b = await p.chromium.launch()
+            b = await p.chromium.launch(args=CHROME_ARGS)
             ctx = await b.new_context(
-                viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True,
-                has_touch=True, user_agent=("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                                            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"))
+                viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True,
+                locale="en-GB",
+                user_agent=("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"))
+            await ctx.add_init_script(STEALTH_JS)
             page = await ctx.new_page()
             try:
-                resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_s * 1000)
-                if resp is not None and resp.status >= 400:
-                    return empty
+                resp = await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                if not await _settle(page):
+                    print("[preview] site kept showing a browser check:", url)
+                    return {**empty, "blocked": True, "available": True}
+                if resp is not None and resp.status >= 400 and resp.status not in (403, 503):
+                    return {**empty, "blocked": True, "available": True}
                 try:
                     await page.wait_for_load_state("networkidle", timeout=6000)
                 except Exception:
                     pass
-                await page.wait_for_timeout(800)
+                # scroll once so lazy-loaded pictures appear, then go back to the top
+                try:
+                    await page.evaluate("window.scrollTo(0, 1500)")
+                    await page.wait_for_timeout(600)
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    pass
                 try:
                     theme = await page.evaluate(THEME_JS)
                 except Exception:
                     theme = None
-                img = await page.screenshot(type="jpeg", quality=60,
+                img = await page.screenshot(type="jpeg", quality=58, animations="disabled",
                                             clip={"x": 0, "y": 0, "width": 390, "height": 1600},
                                             full_page=True)
             finally:
                 await b.close()
-            return {"screenshot": "data:image/jpeg;base64," + base64.b64encode(img).decode(), "theme": theme}
+            return {"screenshot": "data:image/jpeg;base64," + base64.b64encode(img).decode(),
+                    "theme": theme, "blocked": False, "available": True}
 
     try:
         return await asyncio.wait_for(_shot(), timeout_s + 10)
     except Exception as e:
-        print("[preview] skipped:", type(e).__name__, str(e)[:120])
+        print("[preview] skipped:", type(e).__name__, str(e)[:160])
         return empty

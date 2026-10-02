@@ -513,7 +513,7 @@ $("form").addEventListener("submit", async e => {
   delete body.cc;
   body.consent = true;
   SITE = /^https?:\/\//i.test(body.website.trim()) ? body.website.trim() : "https://" + body.website.trim();
-  new Image().src = CFG.thumPrefix + SITE;                   // start the website screenshot now so it is ready in 25 s
+  if (!CFG.ownScreenshots) new Image().src = CFG.thumPrefix + SITE;   // no own screenshots on this server: warm up thum.io
   closeSheet(); $("landing").classList.add("hidden"); $("progress").classList.remove("hidden");
   window.scrollTo(0, 0);
   const prog = runProgress(PROGRESS_SECONDS);
@@ -562,7 +562,10 @@ function showCompany(d){
 
   // phone = their website (thum.io screenshot) with the GHL chat widget at the bottom
   try { sessionStorage.setItem("pv_shot", d.screenshot || ""); } catch (e) {}
-  $("pv").src = API + "/preview-frame?site=" + encodeURIComponent(SITE || c.website) + "&name=" + encodeURIComponent(c.company_name);
+  // own = our phone-layout screenshot; card = the site blocks screenshots; thum = thum.io
+  const mode = d.screenshot ? "own" : d.previewBlocked ? "card" : "thum";
+  $("pv").src = API + "/preview-frame?site=" + encodeURIComponent(SITE || c.website) +
+                "&name=" + encodeURIComponent(c.company_name) + "&mode=" + mode;
 
   const updated = d.agentStatus === "updated";
   $("warn").classList.toggle("hidden", updated);

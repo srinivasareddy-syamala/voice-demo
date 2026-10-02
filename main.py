@@ -17,12 +17,16 @@ import ghl  # noqa: E402
 from persona import build_agent_prompt, build_welcome  # noqa: E402
 from scraper import mobile_preview, scrape_company  # noqa: E402
 
-DEFAULT_WIDGET_ID = "6abf5919cb9ce9d3ea4df163"
+# The chat + call widget shown inside the phone preview. Fixed in code on purpose: an old
+# GHL_WIDGET_ID environment variable (e.g. on Render) must not bring back the previous widget.
+WIDGET_ID = "6abf5919cb9ce9d3ea4df163"
+WIDGET_LOCATION_ID = "s9jsy9dp0zOh0nDsRvcD"
+DEFAULT_WIDGET_ID = WIDGET_ID
 app = FastAPI(title="Voice AI Agent Demo")
 print("=" * 60)
 print("GHL agent updates:", "ON" if ghl.configured() else
       "OFF (DEMO MODE) - fill GHL_API_KEY, GHL_LOCATION_ID, GHL_AGENT_ID in .env")
-print("Widget ID:", os.getenv("GHL_WIDGET_ID", DEFAULT_WIDGET_ID))
+print("Widget ID:", WIDGET_ID)
 print("=" * 60)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
@@ -53,6 +57,7 @@ FRAME_HTML = """<!doctype html>
 <title>Preview</title>
 <style>
   html,body{margin:0;background:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  html{scrollbar-width:none} ::-webkit-scrollbar{display:none}
   #shot{width:100%;display:block}
   #wait{padding:40px 16px;text-align:center;color:#64748B;font-size:13px}
   #fallback{display:none;min-height:100vh;background:linear-gradient(135deg,#2563EB,#45C9FD);color:#fff;
@@ -102,9 +107,8 @@ FRAME_HTML = """<!doctype html>
     }, 1500);
   });
 </script>
-<script src="https://widgets.leadconnectorhq.com/loader.js"
-        data-resources-url="https://widgets.leadconnectorhq.com/chat-widget/loader.js"
-        data-widget-id="__WIDGET__"></script>
+<!-- GHL chat + call widget: exact embed code from GHL (Sites > Chat Widget > Get Code) -->
+<div data-chat-widget data-widget-id="__WIDGET__" data-location-id="__LOCATION__"></div><script src="https://widgets.leadconnectorhq.com/loader.js" data-resources-url="https://widgets.leadconnectorhq.com/chat-widget/loader.js" data-widget-id="__WIDGET__"></script>
 </body></html>"""
 
 
@@ -120,7 +124,8 @@ def preview_frame(site: str = "", name: str = ""):
             .replace("__THUM__", escape(thum_prefix() + site.strip(), quote=True))
             .replace("__NAME__", escape(name[:80] or p.netloc))
             .replace("__HOST__", escape(p.netloc))
-            .replace("__WIDGET__", escape(os.getenv("GHL_WIDGET_ID", DEFAULT_WIDGET_ID), quote=True))
+            .replace("__WIDGET__", WIDGET_ID)
+            .replace("__LOCATION__", WIDGET_LOCATION_ID)
             .replace("__AUTO_OPEN__", "false" if os.getenv("WIDGET_AUTO_OPEN", "1") in ("0", "false", "no") else "true"))
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -129,7 +134,7 @@ def preview_frame(site: str = "", name: str = ""):
 def config():
     """Public config the frontend needs to open the GHL voice widget / call the agent."""
     return {
-        "widgetId": os.getenv("GHL_WIDGET_ID", DEFAULT_WIDGET_ID),
+        "widgetId": WIDGET_ID,
         "whatsapp": os.getenv("WHATSAPP_NUMBER", "+44 7446 952720"),
         "thumPrefix": thum_prefix(),
         "agentPhone": os.getenv("GHL_AGENT_PHONE", ""),

@@ -6,7 +6,7 @@ import time
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -38,12 +38,100 @@ class TrainRequest(BaseModel):
     consent: bool = False
 
 
+def thum_prefix() -> str:
+    """thum.io screenshot URL prefix; the site URL is appended to it.
+    Free tier = desktop layout. With a paid key (THUM_IO_AUTH=<id>-<secret>) we ask for a phone-width render."""
+    auth = os.getenv("THUM_IO_AUTH", "").strip()
+    if auth:
+        return f"https://image.thum.io/get/auth/{auth}/width/600/crop/1300/viewportWidth/420/noanimate/"
+    return "https://image.thum.io/get/width/600/crop/1500/noanimate/"
+
+
+FRAME_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Preview</title>
+<style>
+  html,body{margin:0;background:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  #shot{width:100%;display:block}
+  #wait{padding:40px 16px;text-align:center;color:#64748B;font-size:13px}
+  #fallback{display:none;min-height:100vh;background:linear-gradient(135deg,#2563EB,#45C9FD);color:#fff;
+            flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:24px;text-align:center}
+  #fallback h1{margin:0;font-size:22px} #fallback p{margin:0;opacity:.9;font-size:13px}
+</style></head>
+<body>
+<div id="wait">Loading your website…</div>
+<img id="shot" alt="" style="display:none">
+<div id="fallback"><h1>__NAME__</h1><p>__HOST__</p></div>
+<script>
+  // 1) their website: thum.io screenshot -> our own screenshot -> simple branded card
+  (function () {
+    var img = document.getElementById("shot"), wait = document.getElementById("wait");
+    var own = ""; try { own = sessionStorage.getItem("pv_shot") || ""; } catch (e) {}
+    var tried = false;
+    function show() { wait.style.display = "none"; img.style.display = "block"; }
+    function fail() {
+      if (!tried && own) { tried = true; img.src = own; return; }
+      wait.style.display = "none"; img.style.display = "none";
+      document.getElementById("fallback").style.display = "flex";
+    }
+    img.onload = function () { if (img.naturalWidth < 50) return fail(); show(); };
+    img.onerror = fail;
+    img.src = "__THUM__";
+    setTimeout(function () { if (img.style.display === "none" && !tried) fail(); }, 20000);
+  })();
+  // 2) tell the page outside the phone what the voice call is doing
+  (function () {
+    var orig = window.fetch;
+    window.fetch = function () {
+      var args = arguments, url = String((args[0] && args[0].url) || args[0] || "");
+      return orig.apply(this, args).then(function (res) {
+        if (url.indexOf("start-voice-ai-call") !== -1) {
+          var noAgent = /\/undefined$/.test(url);
+          parent.postMessage({type: "voice", ok: res.status < 400, status: res.status, noAgent: noAgent}, "*");
+        }
+        return res;
+      });
+    };
+  })();
+  // 3) open the chat widget automatically so the options are visible straight away
+  window.addEventListener("LC_chatWidgetLoaded", function () {
+    parent.postMessage({type: "widget-loaded"}, "*");
+    if (__AUTO_OPEN__) setTimeout(function () {
+      try { window.leadConnector.chatWidget.openWidget(); } catch (e) {}
+    }, 1500);
+  });
+</script>
+<script src="https://widgets.leadconnectorhq.com/loader.js"
+        data-resources-url="https://widgets.leadconnectorhq.com/chat-widget/loader.js"
+        data-widget-id="__WIDGET__"></script>
+</body></html>"""
+
+
+@app.get("/preview-frame", response_class=HTMLResponse)
+def preview_frame(site: str = "", name: str = ""):
+    """The page shown INSIDE the phone: a screenshot of the visitor's website with the GHL chat widget on top."""
+    from html import escape
+    from urllib.parse import urlparse
+    p = urlparse(site.strip())
+    if p.scheme not in ("http", "https") or not p.netloc or any(ch in site for ch in '"<> \\\n\r'):
+        raise HTTPException(400, "Invalid website address")
+    html = (FRAME_HTML
+            .replace("__THUM__", escape(thum_prefix() + site.strip(), quote=True))
+            .replace("__NAME__", escape(name[:80] or p.netloc))
+            .replace("__HOST__", escape(p.netloc))
+            .replace("__WIDGET__", escape(os.getenv("GHL_WIDGET_ID", DEFAULT_WIDGET_ID), quote=True))
+            .replace("__AUTO_OPEN__", "false" if os.getenv("WIDGET_AUTO_OPEN", "1") in ("0", "false", "no") else "true"))
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/config")
 def config():
     """Public config the frontend needs to open the GHL voice widget / call the agent."""
     return {
         "widgetId": os.getenv("GHL_WIDGET_ID", DEFAULT_WIDGET_ID),
         "whatsapp": os.getenv("WHATSAPP_NUMBER", "+44 7446 952720"),
+        "thumPrefix": thum_prefix(),
         "agentPhone": os.getenv("GHL_AGENT_PHONE", ""),
         "ghlConfigured": ghl.configured(),
     }

@@ -225,6 +225,76 @@
   }
   /* short screens (landscape phones, small laptops) */
   @media (prefers-reduced-motion:reduce){ .floaty,.ring-shake,.talkbars rect{animation:none!important} }
+
+  /* ===== v3: phone shows the real GHL widget; everything fits on one screen ===== */
+  .stage{display:grid;grid-template-columns:minmax(0,430px) auto;grid-template-areas:"top phone" "rest phone";
+         column-gap:clamp(24px,5vw,64px);row-gap:14px;align-content:center;justify-content:center;--site:#2563EB}
+  .info-top{grid-area:top;align-self:end} .info-rest{grid-area:rest;align-self:start} .phone{grid-area:phone}
+  .info-top .pill{color:#15803D;background:#DCFCE7}
+  .info-top h2{font-size:clamp(22px,3vw,34px);line-height:1.2;margin:4px 0 8px;color:var(--navy);letter-spacing:-.01em}
+  .info-top h2 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hint{margin:0;color:var(--muted);font-size:15px;line-height:1.5}
+  .info-rest .w-desc{font-size:14px;margin:0;-webkit-line-clamp:3;color:#475569}
+  .info-rest .chips{flex-wrap:wrap;margin-top:12px;overflow:visible} .info-rest .chip{font-size:12px;padding:6px 10px}
+  .info-rest .w-contact{font-size:13px;margin-top:12px;gap:4px}
+  .info-rest .wa{display:inline-flex;padding:12px 16px;font-size:14px;margin-top:16px;border-radius:12px}
+  .info-rest .talk-status{text-align:left;font-size:13px;font-weight:700;min-height:0;margin-bottom:8px}
+  .info-rest .talk-status:empty{display:none}
+  iframe.site{width:100%;height:calc(100% - 80px);border:0;background:#fff;display:block}
+
+  form.card label{margin:10px 0 4px}
+  form.card label.consent{margin:12px 0 0}
+
+  /* desktop / laptop: the whole landing page on one screen */
+  @media(min-width:1021px){
+    body{display:flex;flex-direction:column;min-height:100svh}
+    header{width:100%;padding-top:10px;padding-bottom:6px}
+    main.wrap{flex:1;display:flex;flex-direction:column;justify-content:center;width:100%;padding-top:0;padding-bottom:6px}
+    #result{flex:1}
+    .hero{margin-bottom:14px}
+    h1{font-size:clamp(24px,2.9vw,38px);margin:0 0 6px}
+    p.sub{font-size:15px;line-height:1.5}
+    form.card{padding:16px 20px}
+    form.card h2{font-size:18px} form.card .lead{margin-bottom:6px;font-size:12px}
+    .fields{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+    form.card label{margin:8px 0 4px;font-size:12px}
+    form.card input,select.cc{padding:10px 12px;font-size:14px;border-radius:10px}
+    form.card label.consent{margin-top:10px;font-size:10.5px;line-height:1.45}
+    .consent input{width:16px;height:16px}
+    form.card .btn{margin-top:10px;padding:12px;font-size:15px;border-radius:12px}
+    .side svg{max-width:min(300px,36vh)}
+    .side h3{font-size:18px;margin:6px 0 4px} .side p{font-size:13px}
+    .steps3{margin-top:14px;gap:12px} .step{padding:8px 12px;border-radius:14px} .step svg{width:32px;height:32px}
+    .step b{font-size:13px} .step span{font-size:12px}
+    footer{padding:2px 0 8px}
+  }
+  @media(min-width:1021px) and (max-height:790px){ .steps3{display:none} .side svg{max-width:min(260px,32vh)} }
+  @media(min-width:1021px) and (max-height:660px){
+    .hero{margin-bottom:8px} h1{font-size:26px} p.sub{font-size:13.5px}
+    .side p{display:none} .side h3{font-size:16px}
+    form.card{padding:12px 18px} form.card .lead{display:none}
+    form.card label{margin-top:6px} form.card input,select.cc{padding:8px 10px}
+  }
+  /* phones: title, phone, then the company details */
+  @media(max-width:760px){
+    .stage{grid-template-columns:1fr;grid-template-areas:"top" "phone" "rest";justify-items:center;row-gap:10px}
+    .info-top,.info-rest{text-align:center;max-width:520px}
+    .info-top h2{margin:2px 0 4px;font-size:clamp(19px,5.4vw,26px)} .hint{font-size:13px}
+    .info-rest .talk-status{text-align:center} .info-rest .chips{justify-content:center}
+    .info-rest .w-contact{justify-items:center}
+    form.card label{font-size:12.5px;margin-top:8px}
+    form.card input,select.cc{padding:11px 12px}
+    form.card label.consent{font-size:10.5px;line-height:1.45;margin-top:10px}
+    form.card .btn{margin-top:12px;padding:14px}
+    form.card{padding:14px 16px}
+    form.card h2{font-size:18px} form.card .lead{margin-bottom:4px;font-size:12px}
+  }
+  @media(max-width:560px){
+    h1{font-size:clamp(21px,6.2vw,26px);margin:2px 0 8px}
+    .hero{margin-bottom:10px} p.sub{display:none}
+    header{padding-top:10px;padding-bottom:4px}
+  }
+  @media(max-width:380px){ form.card input,select.cc{padding:9px 10px} form.card label{margin-top:6px} }
 </style>
 </head>
 <body>
@@ -269,14 +339,16 @@
       <form class="card" id="form" autocomplete="on">
         <h2>Build my free AI agent</h2>
         <p class="lead">No card, no app. Ready in about 25 seconds.</p>
-        <label for="name">Your name *</label>
-        <input id="name" name="name" required placeholder="James Smith" autocomplete="name">
-        <label for="company">Company name</label>
-        <input id="company" name="company" placeholder="Smith &amp; Sons Ltd" autocomplete="organization">
-        <label for="website">Company website *</label>
-        <input id="website" name="website" required inputmode="url" placeholder="www.yourcompany.co.uk" autocomplete="url">
-        <label for="email">Email *</label>
-        <input id="email" name="email" type="email" required placeholder="james@yourcompany.co.uk" autocomplete="email">
+        <div class="fields">
+          <div><label for="name">Your name *</label>
+            <input id="name" name="name" required placeholder="James Smith" autocomplete="name"></div>
+          <div><label for="company">Company name</label>
+            <input id="company" name="company" placeholder="Smith &amp; Sons Ltd" autocomplete="organization"></div>
+          <div><label for="website">Company website *</label>
+            <input id="website" name="website" required inputmode="url" placeholder="www.yourcompany.co.uk" autocomplete="url"></div>
+          <div><label for="email">Email *</label>
+            <input id="email" name="email" type="email" required placeholder="james@yourcompany.co.uk" autocomplete="email"></div>
+        </div>
         <label for="phone">Phone</label>
         <div class="phone-row">
           <select class="cc" id="cc" name="cc" aria-label="Country code"></select>
@@ -348,52 +420,28 @@
   </section>
 </main>
 
-<!-- 4. RESULT: phone preview with the agent widget inside -->
+<!-- 4. RESULT: company details + a phone showing their website with the GHL chat widget inside -->
 <section id="result" class="stage hidden">
-  <div class="info">
+  <div class="info-top">
     <span class="pill">✓ Your agent is ready</span>
     <h2>Meet <span id="infoCompany">your company</span>'s AI voice agent</h2>
-    <p class="stage-title">Live preview on <b id="siteName"></b></p>
-    <ul class="perks">
-      <li>Tap the mic and ask about services, prices or opening hours</li>
-      <li>It answers from your own website, in a natural voice</li>
-      <li>On your real site it would take every call, 24/7</li>
-    </ul>
-    <a class="wa" id="waLink2" href="#" target="_blank" rel="noopener">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5"/></svg>
-      Get this on my website
-    </a>
+    <p class="hint">In the phone, tap <b>Chat with Voice</b>, allow the microphone and say hello.</p>
   </div>
   <div class="phone">
     <div class="screen">
       <div class="urlbar">🔒 <span id="urlText"></span></div>
-      <div class="site" id="site"></div>
-
-      <div class="widget">
-        <div class="w-head">
-          <div class="w-logo" id="wLogo"></div>
-          <div><div class="w-name" id="wName"></div><div class="w-status">AI Agent · Online</div></div>
-        </div>
-        <p class="w-desc" id="wDesc"></p>
-        <div class="chips" id="wServices"></div>
-        <div class="w-contact" id="wContact"></div>
-        <a class="wa" id="waLink" href="#" target="_blank" rel="noopener">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5"/></svg>
-          <span id="waText">Chat with us on WhatsApp</span>
-        </a>
-        <div class="bubble" id="wWelcome"></div>
-        <div class="talk">
-          <button class="mic-btn" id="talkBtn" type="button" aria-label="Talk to our AI agent">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
-          </button>
-          <div class="talk-text">
-            <div class="talk-label" id="talkLabel">Tap to talk to our AI agent</div>
-            <div class="talk-status" id="talkStatus">Allow the microphone when asked.</div>
-          </div>
-        </div>
-        <div class="powered">Powered by <img src="/static/pragna-logo.png" alt="Pragna AI"></div>
-      </div>
+      <iframe id="pv" class="site" title="Your website with the AI agent" allow="microphone *; autoplay *; clipboard-write *"></iframe>
     </div>
+  </div>
+  <div class="info-rest">
+    <div class="talk-status" id="talkStatus"></div>
+    <p class="w-desc" id="wDesc"></p>
+    <div class="chips" id="wServices"></div>
+    <div class="w-contact" id="wContact"></div>
+    <a class="wa" id="waLink2" href="#" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5"/></svg>
+      Get this on my website
+    </a>
   </div>
 </section>
 <div class="warn hidden" id="warn"></div>
@@ -406,7 +454,9 @@ const PROGRESS_SECONDS = 25;          // length of the progress bar
 const DEFAULT_WIDGET_ID = "6abf5919cb9ce9d3ea4df163";
 const $ = id => document.getElementById(id);
 const txt = (el, s) => { el.textContent = s; return el; };
-let CFG = {widgetId: DEFAULT_WIDGET_ID, agentPhone: "", whatsapp: "+44 7446 952720"};
+let CFG = {widgetId: DEFAULT_WIDGET_ID, agentPhone: "", whatsapp: "+44 7446 952720",
+           thumPrefix: "https://image.thum.io/get/width/600/crop/1500/noanimate/"};
+let SITE = "";
 fetch(API + "/api/config").then(r => r.json()).then(c => CFG = {...CFG, ...c, widgetId: c.widgetId || DEFAULT_WIDGET_ID}).catch(() => {});
 
 /* ---------- the form now sits on the page (no pop-up) ---------- */
@@ -459,6 +509,8 @@ $("form").addEventListener("submit", async e => {
   body.phone = national ? body.cc + national : "";
   delete body.cc;
   body.consent = true;
+  SITE = /^https?:\/\//i.test(body.website.trim()) ? body.website.trim() : "https://" + body.website.trim();
+  new Image().src = CFG.thumPrefix + SITE;                   // start the website screenshot now so it is ready in 25 s
   closeSheet(); $("landing").classList.add("hidden"); $("progress").classList.remove("hidden");
   window.scrollTo(0, 0);
   const prog = runProgress(PROGRESS_SECONDS);
@@ -466,7 +518,6 @@ $("form").addEventListener("submit", async e => {
     const r = await fetch(API + "/api/train", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || "Something went wrong, please try again.");
-    loadGhlWidget();                                         // agent is trained -> load the voice widget
     const wait = PROGRESS_SECONDS - prog.elapsed();          // always show the full 25 s bar
     if (wait > 0) await new Promise(res => setTimeout(res, wait * 1000));
     prog.finish();
@@ -482,180 +533,63 @@ $("form").addEventListener("submit", async e => {
 function showCompany(d){
   const c = d.company;
   const host = new URL(c.website).hostname.replace(/^www\./, "");
-  txt($("siteName"), host);
   txt($("urlText"), host);
-  txt($("wName"), c.company_name);
+  txt($("infoCompany"), c.company_name);
   txt($("wDesc"), c.description || "");
 
-  // logo: site favicon, fallback to initial
-  const initial = (c.company_name || "?").trim()[0].toUpperCase();
-  const logo = $("wLogo"); txt(logo, initial);
-  const img = new Image();
-  img.onload = () => { if (img.naturalWidth > 16) { logo.innerHTML = ""; logo.appendChild(img); } };
-  img.src = "https://www.google.com/s2/favicons?sz=128&domain=" + encodeURIComponent(host);
-
-  // the company's own site as the phone background
-  const site = $("site"); site.innerHTML = "";
-  if (d.screenshot) {
-    const s = new Image(); s.src = d.screenshot; s.alt = host; site.appendChild(s);
-  } else {
-    const f = document.createElement("div"); f.className = "fake";
-    const fi = new Image(); fi.src = img.src; f.appendChild(fi);
-    f.appendChild(txt(document.createElement("h4"), c.company_name));
-    f.appendChild(txt(document.createElement("div"), host));
-    site.appendChild(f);
-  }
-
-  const services = (c.services || []).filter(s => s.length <= 40).slice(0, 8);
+  const services = (c.services || []).filter(s => s.length <= 40).slice(0, 6);
   $("wServices").innerHTML = "";
   services.forEach(s => $("wServices").appendChild(txt(Object.assign(document.createElement("span"), {className: "chip"}), s)));
   $("wServices").classList.toggle("hidden", !services.length);
 
   const rows = [...(c.phones||[]).slice(0,1).map(x => "📞 " + x), ...(c.emails||[]).slice(0,1).map(x => "✉️ " + x),
-                ...(c.hours||[]).slice(0,1).map(x => "🕘 " + x)].slice(0, 2);
+                ...(c.hours||[]).slice(0,1).map(x => "🕘 " + x)];
   $("wContact").innerHTML = "";
   rows.forEach(r => $("wContact").appendChild(txt(document.createElement("div"), r)));
 
-  // WhatsApp contact
   const waDigits = (CFG.whatsapp || "").replace(/[^\d]/g, "");
-  $("waLink").classList.toggle("hidden", !waDigits);
-  $("waLink").href = "https://wa.me/" + waDigits + "?text=" +
-    encodeURIComponent("Hi Pragna AI, I just tried the AI voice agent demo for " + c.company_name + " and would like to know more.");
-  $("waLink2").href = $("waLink").href;
   $("waLink2").classList.toggle("hidden", !waDigits);
-  txt($("infoCompany"), c.company_name);
-  txt($("waText"), "WhatsApp " + CFG.whatsapp);
+  $("waLink2").href = "https://wa.me/" + waDigits + "?text=" +
+    encodeURIComponent("Hi Pragna AI, I just tried the AI voice agent demo for " + c.company_name + " and would like to know more.");
 
   applyTheme(d.theme);
-  txt($("wWelcome"), d.welcomeMessage);
+
+  // phone = their website (thum.io screenshot) with the GHL chat widget at the bottom
+  try { sessionStorage.setItem("pv_shot", d.screenshot || ""); } catch (e) {}
+  $("pv").src = API + "/preview-frame?site=" + encodeURIComponent(SITE || c.website) + "&name=" + encodeURIComponent(c.company_name);
 
   const updated = d.agentStatus === "updated";
   $("warn").classList.toggle("hidden", updated);
   if (!updated) txt($("warn"), "⚠ The GHL agent was NOT updated (" + d.agentStatus + "). It will not know this company. " +
                                "Check GHL_API_KEY, GHL_LOCATION_ID and GHL_AGENT_ID in .env and restart the server.");
 
-  setTalk("idle");
+  setStatus("", "");
   $("progress").classList.add("hidden"); document.querySelector("main").classList.add("hidden");
   $("result").classList.remove("hidden");
   window.scrollTo(0, 0);
 }
 
-/* ---------- use the scraped website's own brand colour inside the phone widget ---------- */
+/* ---------- use the scraped website's own brand colour for the company details ---------- */
 function applyTheme(t){
-  const w = document.querySelector(".widget"), p = t && t.primary;
-  if (!p || !/^#[0-9a-f]{6}$/i.test(p)) { w.style.removeProperty("--site"); w.style.removeProperty("--on-site"); return; }
-  const [r, g, b] = [1, 3, 5].map(i => parseInt(p.slice(i, i + 2), 16));
-  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const w = $("result"), p = t && t.primary;
+  if (!p || !/^#[0-9a-f]{6}$/i.test(p)) { w.style.removeProperty("--site"); return; }
   w.style.setProperty("--site", p);
-  w.style.setProperty("--on-site", lum > 0.62 ? "#0F172A" : "#fff");
 }
 
-/* ---------- talk button state (inside the phone widget) ---------- */
-function setTalk(state, msg){
-  const btn = $("talkBtn"), st = $("talkStatus");
-  btn.classList.toggle("live", state === "live");
-  btn.disabled = state === "connecting";
-  st.className = "talk-status" + (state === "error" ? " bad" : state === "live" ? " good" : "");
-  const labels = {idle: "Tap to talk to our AI agent", connecting: "Connecting…", live: "You're live — start speaking", error: "Tap to try again"};
-  txt($("talkLabel"), labels[state] || labels.idle);
-  txt(st, msg || (state === "idle" ? "Allow the microphone when asked." : ""));
+/* ---------- voice call status, reported by the widget inside the phone ---------- */
+function setStatus(kind, msg){
+  const st = $("talkStatus");
+  st.className = "talk-status" + (kind ? " " + kind : "");
+  txt(st, msg);
 }
-
-/* ---------- GHL Voice AI widget ---------- */
-// Watch the widget's own "start call" request so we can show the real result.
-(function watchVoiceCalls(){
-  const orig = window.fetch;
-  window.fetch = async (...args) => {
-    const url = String((args[0] && args[0].url) || args[0] || "");
-    const res = await orig(...args);
-    if (url.includes("start-voice-ai-call")) {
-      let msg = "";
-      if (res.status >= 400) { try { msg = JSON.stringify((await res.clone().json()).message); } catch (e) {} }
-      console.log("[voice-demo] start-voice-ai-call", res.status, url, msg);
-      if (res.status >= 400) {
-        const noAgent = /\/undefined$/.test(url) || /agentId/i.test(msg);
-        setTalk("error", noAgent
-          ? "The voice widget has no agent selected in GHL (Sites → Chat Widget → choose your Voice AI agent)."
-          : "Call refused (" + res.status + "): " + msg);
-      } else {
-        setTalk("live", "Connected — say hello! The agent knows your company.");
-      }
-    }
-    return res;
-  };
-})();
-
-let widgetPromise = null;
-function loadGhlWidget(){
-  if (widgetPromise) return widgetPromise;
-  widgetPromise = new Promise(res => {
-    window.addEventListener("LC_chatWidgetLoaded", () => res(true), {once: true});
-    const s = document.createElement("script");
-    s.src = "https://widgets.leadconnectorhq.com/loader.js";
-    s.setAttribute("data-resources-url", "https://widgets.leadconnectorhq.com/chat-widget/loader.js");
-    s.setAttribute("data-widget-id", CFG.widgetId || DEFAULT_WIDGET_ID);
-    s.onerror = () => res(false);
-    document.body.appendChild(s);
-    setTimeout(() => res(!!(window.leadConnector && window.leadConnector.chatWidget)), 12000);
-  });
-  return widgetPromise;
-}
-
-// GHL Voice AI widget: <chat-widget> shadow DOM contains
-//   <div class="lc_text-widget--phone-icon" aria-label="Select to start the voice call">
-const START_SELECTORS = [
-  '.lc_text-widget--phone-icon',
-  '[aria-label*="start the voice call" i]',
-  '[aria-label*="start" i][aria-label*="call" i]',
-  '.widget-open-icon'
-];
-function findStartButton(root = document){
-  for (const sel of START_SELECTORS) { const el = root.querySelector(sel); if (el) return el; }
-  for (const el of root.querySelectorAll("*")) if (el.shadowRoot) { const f = findStartButton(el.shadowRoot); if (f) return f; }
-  return null;
-}
-function pressEl(el){
-  const o = {bubbles: true, composed: true, cancelable: true, view: window};
-  ["pointerdown","mousedown","pointerup","mouseup","click"].forEach(t =>
-    el.dispatchEvent(new (t.startsWith("pointer") ? PointerEvent : MouseEvent)(t, o)));
-}
-async function autoStartCall(){
-  for (let i = 0; i < 40; i++) {                         // ~8 s while the widget renders
-    const b = findStartButton();
-    if (b) { pressEl(b); console.log("[voice-demo] pressed GHL start-call button"); return true; }
-    await new Promise(r => setTimeout(r, 200));
-  }
-  console.warn("[voice-demo] GHL start-call button not found");
-  return false;
-}
-
-$("talkBtn").addEventListener("click", async () => {
-  setTalk("connecting", "Allow the microphone when asked.");
-  try {                                                   // mic permission inside the tap (iOS / Android)
-    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-    stream.getTracks().forEach(t => t.stop());
-  } catch (e) {
-    setTalk("error", "Microphone is blocked — allow it in your browser settings and tap again."); return;
-  }
-  const ok = await loadGhlWidget();
-  const w = window.leadConnector && window.leadConnector.chatWidget;
-  if (ok || w) {
-    const started = await autoStartCall();
-    if (!started) {
-      if (w && typeof w.openWidget === "function") w.openWidget();
-      if (CFG.agentPhone) { location.href = "tel:" + CFG.agentPhone.replace(/[^\d+]/g, ""); return; }
-      setTalk("error", "Couldn't start the call automatically — tap \"Call us here\" at the bottom of the page.");
-      return;
-    }
-    // if GHL doesn't answer within 10 s, tell the user what to do
-    setTimeout(() => { if ($("talkLabel").textContent === "Connecting…")
-      setTalk("error", "No answer from the voice service — tap \"Call us here\" at the bottom of the page."); }, 10000);
-    return;
-  }
-  if (CFG.agentPhone) { location.href = "tel:" + CFG.agentPhone.replace(/[^\d+]/g, ""); return; }
-  setTalk("error", "Couldn't load the voice agent. Check your connection and try again.");
+window.addEventListener("message", e => {
+  if (e.source !== $("pv").contentWindow || !e.data) return;
+  if (e.data.type !== "voice") return;
+  if (e.data.ok) setStatus("good", "✓ Connected — say hello! The agent knows your company.");
+  else setStatus("bad", e.data.noAgent
+    ? "The chat widget has no Voice AI agent selected in GHL (Sites → Chat Widget → choose your agent)."
+    : "The voice call was refused (" + e.data.status + "). Please try again.");
 });
-
 </script>
 </body>
 </html>

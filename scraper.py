@@ -151,6 +151,65 @@ async def _render_js(url: str) -> str | None:
         return None
 
 
+async def _fetch_css(client: httpx.AsyncClient, url: str, use_chrome: bool = False) -> str | None:
+    try:
+        if use_chrome:
+            from curl_cffi import requests as creq
+            r = await asyncio.to_thread(lambda: creq.get(url, impersonate="chrome", timeout=15))
+        else:
+            r = await client.get(url)
+        return r.text[:400000] if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------- site theme (brand colour)
+HEX_RE = re.compile(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})(?![0-9a-fA-F])")
+RGB_RE = re.compile(r"rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})")
+
+
+def _sat_light(rgb: tuple[int, int, int]) -> tuple[float, float]:
+    mx, mn = max(rgb), min(rgb)
+    light = (mx + mn) / 510
+    sat = 0 if mx == mn else (mx - mn) / (255 - abs(mx + mn - 255))
+    return sat, light
+
+
+def _is_brand(rgb) -> bool:
+    sat, light = _sat_light(rgb)
+    return sat >= 0.35 and 0.18 <= light <= 0.70          # colourful, not near white/black/grey
+
+
+def theme_from_css(home: BeautifulSoup, css_texts: list[str]) -> dict:
+    """Best guess of the site's brand colour from <meta name=theme-color> and its stylesheets."""
+    def to_rgb(h: str):
+        h = h.lstrip("#")
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+    counts: dict[tuple, float] = {}
+    meta = home.find("meta", attrs={"name": "theme-color"})
+    if meta and HEX_RE.fullmatch((meta.get("content") or "").strip()):
+        rgb = to_rgb(meta["content"].strip())
+        if _is_brand(rgb):
+            counts[rgb] = counts.get(rgb, 0) + 50
+    inline = " ".join(t.get_text() for t in home.find_all("style")) + " " + \
+             " ".join(el.get("style", "") for el in home.find_all(style=True))
+    for weight, text in [(3, inline)] + [(1, c) for c in css_texts]:
+        for m in HEX_RE.finditer(text):
+            rgb = to_rgb(m.group(0))
+            if _is_brand(rgb):
+                counts[rgb] = counts.get(rgb, 0) + weight
+        for m in RGB_RE.finditer(text):
+            rgb = tuple(min(255, int(x)) for x in m.groups())
+            if _is_brand(rgb):
+                counts[rgb] = counts.get(rgb, 0) + weight
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])
+    hexs = ["#%02x%02x%02x" % rgb for rgb, _ in ranked[:2]]
+    return {"primary": hexs[0] if hexs else None, "secondary": hexs[1] if len(hexs) > 1 else None, "source": "css"}
+
+
 # ---------------------------------------------------------------- parsing
 def _json_ld(soup: BeautifulSoup) -> list[dict]:
     """schema.org data many sites embed: Organization / LocalBusiness / FAQPage / Product."""
@@ -271,10 +330,16 @@ async def scrape_company(url: str, company_name: str = "") -> dict:
         order = ["about", "service", "pricing", "contact", "faq"]
         links.sort(key=lambda l: next((i for i, k in enumerate(order) if k in l.lower()), 9))
         fetch_one = (lambda l: _fetch_chrome(l)) if use_chrome else (lambda l: _fetch(client, l))
-        sub = await asyncio.gather(*[fetch_one(l) for l in links[:MAX_PAGES - 1]])
+        css_links = [urljoin(url, l["href"]) for l in home.find_all("link", href=True)
+                     if "stylesheet" in " ".join(l.get("rel") or []).lower()][:3]
+        results = await asyncio.gather(*[fetch_one(l) for l in links[:MAX_PAGES - 1]],
+                                       *[_fetch_css(client, c, use_chrome) for c in css_links])
+        sub, css_texts = results[:len(links[:MAX_PAGES - 1])], results[len(links[:MAX_PAGES - 1]):]
 
     pages = [(url, home_html)] + [(l, h) for l, h in zip(links, sub) if h]
-    return extract_profile(pages, url, company_name)
+    profile = extract_profile(pages, url, company_name)
+    profile["theme"] = theme_from_css(home, [c for c in css_texts if c])
+    return profile
 
 
 def extract_profile(pages: list[tuple[str, str]], url: str, company_name: str = "") -> dict:
@@ -421,14 +486,38 @@ def profile_text(p: dict, max_chars: int = 9000) -> str:
 
 
 # ---------------------------------------------------------------- mobile preview
-async def mobile_screenshot(url: str, timeout_s: int = 20) -> str | None:
-    """Phone-sized screenshot of the company site (base64 JPEG) for the mobile preview.
-    Uses the same headless Chrome as _render_js. Returns None if unavailable."""
+THEME_JS = r"""
+() => {
+  const parse = c => { const m = (c||'').match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/);
+    if (!m) return null; if (m[4] !== undefined && parseFloat(m[4]) < 0.5) return null; return [+m[1], +m[2], +m[3]]; };
+  const sl = ([r,g,b]) => { const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+    return [mx===mn ? 0 : (mx-mn)/(255-Math.abs(mx+mn-255)), (mx+mn)/510]; };
+  const score = {};
+  const add = (c, w) => { const p = parse(c); if (!p) return; const [s,l] = sl(p);
+    if (s < 0.35 || l < 0.18 || l > 0.70) return; const k = p.join(','); score[k] = (score[k]||0) + w; };
+  document.querySelectorAll('button, a, [class*="btn"], [class*="button"], header, nav, footer, [class*="hero"], [class*="banner"], h1, h2, h3')
+    .forEach(el => { const r = el.getBoundingClientRect(); if (!r.width || !r.height) return;
+      const cs = getComputedStyle(el), area = Math.min(r.width*r.height, 40000)/1000;
+      add(cs.backgroundColor, 3 + area/4);
+      if (el.tagName === 'A' || /^H\d$/.test(el.tagName)) add(cs.color, 1);
+      const bi = cs.backgroundImage;
+      if (bi && bi.includes('gradient')) (bi.match(/rgba?\([^)]+\)/g) || []).forEach(c => add(c, 2 + area/6)); });
+  const hex = a => '#' + a.map(x => x.toString(16).padStart(2,'0')).join('');
+  const best = Object.entries(score).sort((a,b) => b[1]-a[1]).slice(0,2).map(e => hex(e[0].split(',').map(Number)));
+  return {primary: best[0] || null, secondary: best[1] || null, source: 'rendered'};
+}
+"""
+
+
+async def mobile_preview(url: str, timeout_s: int = 20) -> dict:
+    """Phone-sized screenshot of the company site (base64 JPEG) + the brand colours actually
+    rendered on it. Uses headless Chrome. Returns {"screenshot": None, "theme": None} if unavailable."""
     import base64
+    empty = {"screenshot": None, "theme": None}
     try:
         from playwright.async_api import async_playwright
     except ImportError:
-        return None
+        return empty
 
     async def _shot():
         async with async_playwright() as p:
@@ -439,21 +528,27 @@ async def mobile_screenshot(url: str, timeout_s: int = 20) -> str | None:
                                             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"))
             page = await ctx.new_page()
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=timeout_s * 1000)
+                resp = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_s * 1000)
+                if resp is not None and resp.status >= 400:
+                    return empty
                 try:
                     await page.wait_for_load_state("networkidle", timeout=6000)
                 except Exception:
                     pass
                 await page.wait_for_timeout(800)
+                try:
+                    theme = await page.evaluate(THEME_JS)
+                except Exception:
+                    theme = None
                 img = await page.screenshot(type="jpeg", quality=60,
                                             clip={"x": 0, "y": 0, "width": 390, "height": 1600},
                                             full_page=True)
             finally:
                 await b.close()
-            return "data:image/jpeg;base64," + base64.b64encode(img).decode()
+            return {"screenshot": "data:image/jpeg;base64," + base64.b64encode(img).decode(), "theme": theme}
 
     try:
         return await asyncio.wait_for(_shot(), timeout_s + 10)
     except Exception as e:
-        print("[screenshot] skipped:", type(e).__name__, str(e)[:120])
-        return None
+        print("[preview] skipped:", type(e).__name__, str(e)[:120])
+        return empty

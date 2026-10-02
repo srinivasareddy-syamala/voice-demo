@@ -21,7 +21,7 @@ greeting (real names filled in) into the agent via the API. Nothing needs merge 
 | `static/index.html` | Mobile-first page: landing, bottom-sheet form, progress, company card, sticky **Talk with Agent** |
 
 ## GHL setup
-1. Your Voice AI widget is already wired in: `data-widget-id="6abdf6d0b9739b959264b321"`
+1. Your Voice AI widget is already wired in: `data-widget-id="6abf5919cb9ce9d3ea4df163"`
    (default in code; override with `GHL_WIDGET_ID`). Don't paste the `<script>` on the page yourself:
    the page loads it **after** the agent has been trained, so the first call already has the new prompt.
 2. Make sure that widget is linked to the agent whose ID you put in `GHL_AGENT_ID`

@@ -15,13 +15,14 @@ load_dotenv(".env.example")   # otherwise use the values in .env.example
 
 import ghl  # noqa: E402
 from persona import build_agent_prompt, build_welcome  # noqa: E402
-from scraper import mobile_screenshot, scrape_company  # noqa: E402
+from scraper import mobile_preview, scrape_company  # noqa: E402
 
+DEFAULT_WIDGET_ID = "6abf5919cb9ce9d3ea4df163"
 app = FastAPI(title="Voice AI Agent Demo")
 print("=" * 60)
 print("GHL agent updates:", "ON" if ghl.configured() else
       "OFF (DEMO MODE) - fill GHL_API_KEY, GHL_LOCATION_ID, GHL_AGENT_ID in .env")
-print("Widget ID:", os.getenv("GHL_WIDGET_ID", "6abdf6d0b9739b959264b321"))
+print("Widget ID:", os.getenv("GHL_WIDGET_ID", DEFAULT_WIDGET_ID))
 print("=" * 60)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
@@ -34,13 +35,15 @@ class TrainRequest(BaseModel):
     phone: str = ""
     company: str = ""
     website: str
+    consent: bool = False
 
 
 @app.get("/api/config")
 def config():
     """Public config the frontend needs to open the GHL voice widget / call the agent."""
     return {
-        "widgetId": os.getenv("GHL_WIDGET_ID", "6abdf6d0b9739b959264b321"),
+        "widgetId": os.getenv("GHL_WIDGET_ID", DEFAULT_WIDGET_ID),
+        "whatsapp": os.getenv("WHATSAPP_NUMBER", "+44 7446 952720"),
         "agentPhone": os.getenv("GHL_AGENT_PHONE", ""),
         "ghlConfigured": ghl.configured(),
     }
@@ -49,7 +52,11 @@ def config():
 @app.post("/api/train")
 async def train(req: TrainRequest):
     t0 = time.time()
+    if not req.consent:
+        raise HTTPException(400, "Please tick the consent box to continue.")
     visitor = req.model_dump()
+    consent_line = "Consent to use public website content for the demo: YES (" + \
+                   time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")"
 
     # 1) save the form to GHL straight away - the lead is kept even if the website can't be read
     contact_task = asyncio.create_task(
@@ -62,7 +69,7 @@ async def train(req: TrainRequest):
         return contact
 
     form_lines = (f"Name: {req.name}\nEmail: {req.email or '-'}\nPhone: {req.phone or '-'}\n"
-                  f"Company: {req.company or '-'}\nWebsite: {req.website}")
+                  f"Company: {req.company or '-'}\nWebsite: {req.website}\n{consent_line}")
 
     # 2) read the company website
     try:
@@ -99,8 +106,10 @@ async def train(req: TrainRequest):
             f"Phones: {', '.join(data['phones']) or '-'} | Emails: {', '.join(data['emails']) or '-'}\n"
             f"Pages read: {len(data['pages_scraped'])}")
 
-    agent_status, contact, shot = await asyncio.gather(
-        update_agent(), save_contact(), mobile_screenshot(data["website"]))
+    agent_status, contact, preview = await asyncio.gather(
+        update_agent(), save_contact(), mobile_preview(data["website"]))
+    # brand colour: what the page really renders, else what its stylesheets say
+    theme = preview.get("theme") if (preview.get("theme") or {}).get("primary") else data.get("theme")
 
     return {
         "status": "ok",
@@ -113,7 +122,8 @@ async def train(req: TrainRequest):
         "promptPreview": prompt[:1500],
         "promptChars": len(prompt),
         "contact": contact,
-        "screenshot": shot,
+        "screenshot": preview.get("screenshot"),
+        "theme": theme,
     }
 
 

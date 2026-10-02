@@ -35,6 +35,11 @@
   label{display:block;font-size:13px;font-weight:700;margin:14px 0 6px;color:var(--navy)} label:first-of-type{margin-top:0}
   input{width:100%;padding:14px;border-radius:12px;border:1px solid var(--line);background:#F8FAFC;color:var(--navy);font:500 16px "Plus Jakarta Sans",sans-serif;outline:none}
   input:focus{border-color:var(--blue2);background:#fff;box-shadow:0 0 0 4px #3396F51f}
+  .phone-row{display:flex;gap:8px}
+  select.cc{flex:none;width:112px;padding:14px 8px;border-radius:12px;border:1px solid var(--line);background:#F8FAFC;color:var(--navy);font:600 15px "Plus Jakarta Sans",sans-serif;outline:none}
+  select.cc:focus{border-color:var(--blue2);box-shadow:0 0 0 4px #3396F51f}
+  .consent{display:flex;gap:10px;align-items:flex-start;margin:18px 0 0;font-size:12px;font-weight:500;color:var(--muted);line-height:1.55;cursor:pointer}
+  .consent input{width:18px;height:18px;margin:2px 0 0;flex:none;padding:0;accent-color:var(--blue);cursor:pointer}
   .err{color:var(--err);font-size:14px;margin-top:12px;display:none;line-height:1.45}
   /* form sheet */
   .sheet-bg{position:fixed;inset:0;background:#0f172a66;backdrop-filter:blur(4px);z-index:60;display:flex;align-items:flex-end;justify-content:center}
@@ -45,13 +50,40 @@
   .grab{width:44px;height:5px;border-radius:9px;background:var(--line);margin:0 auto 14px}
   @media(min-width:768px){.sheet-bg{align-items:center}.sheet{border-radius:22px}}
   /* progress */
-  .progress{text-align:center;padding:34px 22px}
-  .progress img{width:56px;height:56px;animation:float 2s ease-in-out infinite}
-  @keyframes float{50%{transform:translateY(-6px)}}
-  .progress h3{margin:16px 0 6px;color:var(--navy);font-size:20px}
-  .progress p{margin:0 0 20px;color:var(--muted);font-size:14px}
-  .bar{height:12px;border-radius:99px;background:#E8EEF8;overflow:hidden}
-  .bar i{display:block;height:100%;width:0;background:var(--grad);border-radius:99px;transition:width .25s linear}
+  .progress{text-align:center;padding:30px 22px}
+  .progress h3{margin:18px 0 6px;color:var(--navy);font-size:20px}
+  .progress p{margin:0 0 20px;color:var(--muted);font-size:14px;min-height:20px;transition:opacity .35s,transform .35s}
+  .progress p.out{opacity:0;transform:translateY(6px)}
+  .bar{height:12px;border-radius:99px;background:#E8EEF8;overflow:hidden;position:relative}
+  .bar i{display:block;height:100%;width:0;background:var(--grad);border-radius:99px;transition:width .25s linear;position:relative;overflow:hidden}
+  .bar i::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,#ffffff88,transparent);transform:translateX(-100%);animation:sheen 1.4s infinite}
+  @keyframes sheen{to{transform:translateX(100%)}}
+  /* building animation */
+  .scene{position:relative;width:260px;height:150px;margin:0 auto}
+  .blocks{position:absolute;left:8px;top:44px;width:62px;height:62px}
+  .blocks b{position:absolute;border-radius:9px;animation:assemble 3s cubic-bezier(.5,1.6,.4,1) infinite}
+  .blocks b:nth-child(1){left:2px;top:0;width:24px;height:24px;background:#45C9FD;--fx:-26px;--fy:-30px;--fr:-40deg}
+  .blocks b:nth-child(2){left:30px;top:0;width:30px;height:30px;background:#3396F5;--fx:30px;--fy:-34px;--fr:35deg;animation-delay:.15s}
+  .blocks b:nth-child(3){left:0;top:28px;width:28px;height:34px;background:#2563EB;--fx:-30px;--fy:30px;--fr:30deg;animation-delay:.3s}
+  .blocks b:nth-child(4){left:32px;top:34px;width:24px;height:24px;background:#45C9FD;--fx:28px;--fy:32px;--fr:-35deg;animation-delay:.45s}
+  @keyframes assemble{0%,12%{transform:translate(var(--fx),var(--fy)) rotate(var(--fr)) scale(.6);opacity:0}38%,82%{transform:none;opacity:1}100%{transform:scale(.7);opacity:0}}
+  .mini-phone{position:absolute;left:50%;top:6px;margin-left:-38px;width:76px;height:138px;border:3px solid var(--navy);border-radius:18px;background:#fff;overflow:hidden;padding:12px 8px 0;box-shadow:0 14px 30px #2563EB26}
+  .sk{display:block;height:7px;border-radius:6px;margin-bottom:7px;background:linear-gradient(90deg,#E2E8F0 25%,#F8FAFC 45%,#E2E8F0 65%);background-size:200% 100%;animation:shimmer 1.3s linear infinite}
+  .sk.s2{width:70%} .sk.s3{width:85%} .sk.s5{width:60%;margin:0 auto 6px}
+  @keyframes shimmer{to{background-position:-200% 0}}
+  .mini-card{position:absolute;left:5px;right:5px;bottom:5px;background:#fff;border-radius:12px;box-shadow:0 -4px 14px #0f172a22;padding:8px 6px 6px;animation:rise 3s ease-in-out infinite}
+  @keyframes rise{0%,10%{transform:translateY(110%)}35%,85%{transform:none}100%{transform:translateY(110%)}}
+  .mini-mic{width:22px;height:22px;border-radius:50%;background:var(--grad);margin:0 auto;animation:pop 1.2s ease-in-out infinite}
+  @keyframes pop{50%{transform:scale(1.18);box-shadow:0 0 0 6px #3396F533}}
+  .wave{position:absolute;right:6px;top:50px;height:50px;display:flex;align-items:center;gap:4px}
+  .wave i{width:5px;border-radius:5px;background:var(--grad);animation:wave 1s ease-in-out infinite}
+  .wave i:nth-child(1){height:14px}.wave i:nth-child(2){height:30px;animation-delay:.1s}.wave i:nth-child(3){height:46px;animation-delay:.2s}
+  .wave i:nth-child(4){height:26px;animation-delay:.3s}.wave i:nth-child(5){height:40px;animation-delay:.4s}.wave i:nth-child(6){height:20px;animation-delay:.5s}.wave i:nth-child(7){height:12px;animation-delay:.6s}
+  @keyframes wave{50%{transform:scaleY(.35)}}
+  .spark{position:absolute;width:8px;height:8px;border-radius:50%;background:#45C9FD;animation:spark 2.4s ease-in-out infinite}
+  .spark.a{left:84px;top:8px}.spark.b{right:78px;top:118px;background:#2563EB;animation-delay:.8s}.spark.c{right:64px;top:14px;width:6px;height:6px;animation-delay:1.5s}
+  @keyframes spark{0%,100%{transform:scale(0);opacity:0}50%{transform:scale(1);opacity:1}}
+  @media (prefers-reduced-motion:reduce){.scene *, .bar i::after{animation:none!important}}
   .pct{margin-top:10px;font-weight:800;color:var(--blue);font-size:14px}
   /* phone mock-up */
   .stage{display:flex;flex-direction:column;align-items:center;gap:14px}
@@ -72,7 +104,8 @@
   .widget{position:absolute;left:10px;right:10px;bottom:10px;z-index:6;background:#fff;border-radius:26px;box-shadow:0 -6px 40px #0f172a33;padding:16px;max-height:72%;overflow-y:auto;scrollbar-width:none}
   .widget::-webkit-scrollbar{display:none}
   .w-head{display:flex;gap:12px;align-items:center}
-  .w-logo{width:46px;height:46px;border-radius:14px;background:var(--grad);display:grid;place-items:center;color:#fff;font-weight:800;font-size:20px;flex:none;overflow:hidden;border:1px solid var(--line)}
+  .widget{--site:#2563EB;--on-site:#fff;--site2:color-mix(in srgb,var(--site) 68%,#fff)}
+  .w-logo{width:46px;height:46px;border-radius:14px;background:linear-gradient(135deg,var(--site),var(--site2));display:grid;place-items:center;color:#fff;font-weight:800;font-size:20px;flex:none;overflow:hidden;border:1px solid var(--line)}
   .w-logo img{width:100%;height:100%;object-fit:contain;background:#fff}
   .w-name{font-weight:800;color:var(--navy);font-size:16px;line-height:1.2}
   .w-status{font-size:12px;color:var(--ok);display:flex;align-items:center;gap:6px;font-weight:600}
@@ -80,13 +113,15 @@
   .w-desc{font-size:13px;color:#475569;line-height:1.5;margin:12px 0 0;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
   .chips{display:flex;gap:6px;overflow-x:auto;margin-top:10px;padding-bottom:2px;scrollbar-width:none}
   .chips::-webkit-scrollbar{display:none}
-  .chip{font-size:12px;padding:6px 10px;border-radius:999px;background:#EFF6FF;color:var(--blue);font-weight:600;white-space:nowrap;flex:none}
+  .chip{font-size:12px;padding:6px 10px;border-radius:999px;background:color-mix(in srgb,var(--site) 10%,#fff);color:color-mix(in srgb,var(--site) 85%,#000);font-weight:600;white-space:nowrap;flex:none}
   .w-contact{margin-top:10px;display:grid;gap:4px;font-size:12px;color:#475569}
-  .bubble{margin-top:12px;background:#F1F5F9;border-radius:16px 16px 16px 4px;padding:10px 12px;font-size:13px;color:var(--ink);line-height:1.45}
+  .wa{margin-top:10px;display:flex;align-items:center;justify-content:center;gap:8px;background:#25D366;color:#fff;border-radius:12px;padding:10px 12px;font-weight:700;font-size:13px;text-decoration:none}
+  .wa svg{width:18px;height:18px;flex:none}
+  .bubble{border-left:3px solid var(--site);margin-top:12px;background:#F1F5F9;border-radius:16px 16px 16px 4px;padding:10px 12px;font-size:13px;color:var(--ink);line-height:1.45}
   .talk{margin-top:14px;display:flex;flex-direction:column;align-items:center;gap:8px;position:sticky;bottom:-16px;background:#fff;padding:10px 0 8px;z-index:2}
-  .mic-btn{width:74px;height:74px;border-radius:50%;border:0;cursor:pointer;background:var(--grad);color:#fff;display:grid;place-items:center;position:relative;box-shadow:0 12px 28px #2563EB55}
+  .mic-btn{width:74px;height:74px;border-radius:50%;border:0;cursor:pointer;background:linear-gradient(135deg,var(--site),var(--site2));color:var(--on-site);display:grid;place-items:center;position:relative;box-shadow:0 12px 28px color-mix(in srgb,var(--site) 35%,transparent)}
   .mic-btn svg{width:30px;height:30px}
-  .mic-btn::after{content:"";position:absolute;inset:-8px;border-radius:50%;border:3px solid #3396F555;animation:ring 1.8s infinite}
+  .mic-btn::after{content:"";position:absolute;inset:-8px;border-radius:50%;border:3px solid color-mix(in srgb,var(--site) 35%,transparent);animation:ring 1.8s infinite}
   .mic-btn.live{background:linear-gradient(135deg,#16A34A,#22C55E);box-shadow:0 12px 28px #16A34A55}
   .mic-btn.live::after{border-color:#22C55E66}
   @keyframes ring{0%{transform:scale(.92);opacity:1}100%{transform:scale(1.18);opacity:0}}
@@ -96,21 +131,100 @@
   .powered{margin-top:12px;display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:#94A3B8}
   .powered img{height:14px}
   .warn{max-width:380px;padding:12px 14px;border-radius:14px;background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;font-size:13px;line-height:1.45}
-  .links{display:flex;gap:10px;width:100%;max-width:380px} .links .btn{margin-top:0}
   footer{text-align:center;color:#94A3B8;font-size:12px;padding:10px 0 30px}
   footer img{height:16px;vertical-align:middle;margin-left:4px}
-  /* real phones: drop the bezel, use the whole screen */
-  @media(max-width:480px){
-    .wrap{padding:6px 12px 40px}
-    header{padding:12px 14px} header img{height:24px}
-    #result{gap:8px}
-    .phone{width:100%;height:calc(100svh - 110px);min-height:560px;border-radius:30px;padding:0;background:none;box-shadow:0 20px 50px #0f172a26}
-    .phone::before{display:none}
-    .screen{border-radius:30px}
-    .urlbar{top:10px}
-    .site{top:52px} .screen::after{height:52px}
-    h1{font-size:28px}
+  /* ===== layout v2: form on the page with illustrations, compact phone, responsive on every screen ===== */
+  img,svg{max-width:100%}
+  header{max-width:1180px;padding:16px clamp(14px,3vw,28px)}
+  header img{height:clamp(22px,2.6vw,30px)}
+  .wrap{max-width:1180px;padding:8px clamp(14px,3vw,28px) 48px}
+  .hero{text-align:center;max-width:800px;margin:0 auto clamp(18px,3vw,30px)}
+  h1{font-size:clamp(26px,4.6vw,46px);margin:8px 0 12px}
+  p.sub{font-size:clamp(15px,1.5vw,18px);margin-bottom:0}
+  .grid3{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,440px) minmax(0,1fr);gap:clamp(16px,2.4vw,34px);align-items:center}
+  .side{text-align:center}
+  .side svg{width:100%;height:auto;max-width:330px;display:block;margin:0 auto}
+  .side h3{margin:10px 0 6px;font-size:clamp(16px,1.6vw,21px);color:var(--navy);line-height:1.25}
+  .side p{margin:0 auto;color:var(--muted);font-size:14px;line-height:1.55;max-width:300px}
+  .pill{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:5px 10px;border-radius:999px;margin-bottom:8px}
+  .side.miss .pill{color:#B91C1C;background:#FEE2E2} .side.win .pill{color:#15803D;background:#DCFCE7}
+  .floaty{animation:floaty 5s ease-in-out infinite} .side.win .floaty{animation-delay:-2.5s}
+  @keyframes floaty{50%{transform:translateY(-6px)}}
+  .ring-shake{transform-origin:160px 125px;animation:shake 2.6s ease-in-out infinite}
+  @keyframes shake{0%,60%,100%{transform:rotate(-6deg)}66%{transform:rotate(-10deg)}72%{transform:rotate(-2deg)}78%{transform:rotate(-9deg)}84%{transform:rotate(-4deg)}}
+  .talkbars rect{transform-box:fill-box;transform-origin:center;animation:wave 1s ease-in-out infinite}
+  .talkbars rect:nth-child(2){animation-delay:.1s}.talkbars rect:nth-child(3){animation-delay:.2s}.talkbars rect:nth-child(4){animation-delay:.3s}
+  .talkbars rect:nth-child(5){animation-delay:.4s}.talkbars rect:nth-child(6){animation-delay:.5s}.talkbars rect:nth-child(7){animation-delay:.6s}
+  form.card{padding:clamp(18px,2.4vw,26px)}
+  form.card h2{margin:0 0 4px;font-size:20px;color:var(--navy)}
+  form.card .lead{margin:0 0 16px;color:var(--muted);font-size:13px;line-height:1.5}
+  .steps3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:clamp(22px,3.4vw,38px) auto 0;max-width:980px}
+  .step{display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px}
+  .step svg{width:40px;height:40px;flex:none}
+  .step b{display:block;color:var(--navy);font-size:14px} .step span{color:var(--muted);font-size:12.5px;line-height:1.4}
+  #progress{max-width:560px;margin:10px auto 0}
+  /* result: text + compact phone */
+  .stage{flex-direction:row;justify-content:center;align-items:center;gap:clamp(20px,5vw,64px);max-width:1080px;margin:0 auto;padding:6px clamp(14px,3vw,28px) 36px}
+  .info{max-width:430px}
+  .info .pill{color:#15803D;background:#DCFCE7}
+  .info h2{font-size:clamp(22px,3vw,34px);line-height:1.2;margin:4px 0 10px;color:var(--navy);letter-spacing:-.01em}
+  .info h2 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .info .stage-title{text-align:left;margin-bottom:16px}
+  .info .perks{margin-bottom:20px}
+  .info .wa{display:inline-flex;padding:12px 16px;font-size:14px;margin-top:0}
+  .phone{--ph:clamp(470px,calc(100svh - 150px),610px);height:var(--ph);width:calc(var(--ph) * .492);border-radius:44px;padding:10px;flex:none}
+  .phone::before{top:18px;width:86px;height:22px}
+  .screen{border-radius:35px}
+  .urlbar{top:46px;left:12px;right:12px;padding:6px 10px;font-size:11px}
+  .site{top:80px} .screen::after{height:80px}
+  .widget{left:8px;right:8px;bottom:8px;border-radius:22px;padding:12px;max-height:54%}
+  .w-head{gap:10px}
+  .w-logo{width:36px;height:36px;border-radius:11px;font-size:16px} .w-name{font-size:14px} .w-status{font-size:11px}
+  .w-desc{font-size:12px;margin-top:8px;-webkit-line-clamp:2}
+  .chips{margin-top:8px} .chip{font-size:11px;padding:5px 9px}
+  .w-contact{font-size:11px;margin-top:8px;gap:2px}
+  .w-contact div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .widget .wa{margin-top:8px;padding:7px 8px;font-size:11.5px;border-radius:10px;white-space:nowrap;gap:6px} .widget .wa svg{width:15px;height:15px}
+  .bubble{margin-top:8px;padding:8px 10px;font-size:12px;border-radius:12px 12px 12px 4px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .talk{margin-top:8px;flex-direction:row;align-items:center;justify-content:flex-start;gap:14px;padding:10px 6px 6px;bottom:-12px;border-top:1px solid var(--line)}
+  .talk-text{min-width:0;text-align:left}
+  .mic-btn{width:50px;height:50px;flex:none} .mic-btn svg{width:22px;height:22px} .mic-btn::after{inset:-5px;border-width:2px}
+  .talk-label{font-size:13px;line-height:1.25} .talk-status{font-size:11px;min-height:14px;text-align:left;line-height:1.3;margin-top:2px}
+  .powered{margin-top:6px;font-size:10px} .powered img{height:12px}
+  .warn{max-width:430px;margin:0 auto 20px}
+  footer{padding:6px 0 26px}
+
+  /* tablets / small laptops: form on top, the two pictures side by side underneath */
+  @media(max-width:1020px){
+    .grid3{grid-template-columns:1fr 1fr}
+    .grid3 form{grid-column:1/-1;grid-row:1;max-width:540px;width:100%;margin:0 auto}
+    .side svg{max-width:270px}
   }
+  /* phones */
+  @media(max-width:760px){
+    .steps3{grid-template-columns:1fr}
+    .stage{flex-direction:column;gap:14px}
+    .info{text-align:center;max-width:520px}
+    .info .stage-title{text-align:center;margin-bottom:0}
+    .info .perks,.info .wa{display:none}
+    .info h2{margin:2px 0 4px;font-size:clamp(19px,5.4vw,26px)}
+    .info .pill{margin-bottom:4px}
+    .phone{--ph:clamp(440px,calc(100svh - 210px),600px)}
+    .stage{padding-top:0}
+    header{padding-top:12px;padding-bottom:8px}
+  }
+  @media(max-width:560px){
+    .grid3{gap:12px}
+    .side h3{font-size:15px} .side p{font-size:12.5px} .pill{font-size:10px;padding:4px 8px}
+    .phone-row{gap:6px} select.cc{width:118px;font-size:13.5px;padding:14px 6px}
+    .card{border-radius:18px}
+  }
+  @media(max-width:360px){
+    select.cc{width:112px;font-size:13px;padding:14px 4px}
+    .grid3{grid-template-columns:1fr} .side svg{max-width:240px}
+  }
+  /* short screens (landscape phones, small laptops) */
+  @media (prefers-reduced-motion:reduce){ .floaty,.ring-shake,.talkbars rect{animation:none!important} }
 </style>
 </head>
 <body>
@@ -120,31 +234,136 @@
 </header>
 
 <main class="wrap">
-  <!-- 1. LANDING -->
+  <!-- 1. LANDING: headline, form in the middle, a picture either side -->
   <section id="landing">
-    <h1>Hear <span>your own AI voice agent</span> talk about your business</h1>
-    <p class="sub">Enter your website. In about 25 seconds Pragna AI learns your company and you can talk to your agent live — right inside a preview of your own site.</p>
-    <ul class="perks">
-      <li>Learns your services, hours &amp; FAQs from your website</li>
-      <li>Talks live in the browser — no app, no phone call</li>
-      <li>Answers visitors 24/7, qualifies leads and books meetings</li>
-    </ul>
-    <button class="btn" id="openForm" type="button">Build my free AI agent →</button>
+    <div class="hero">
+      <h1>Hear <span>your own AI voice agent</span> talk about your business</h1>
+      <p class="sub">Enter your website. In about 25 seconds Pragna AI learns your company and you can talk to your agent live — right inside a preview of your own site.</p>
+    </div>
+
+    <div class="grid3">
+      <aside class="side miss">
+        <svg class="floaty" viewBox="0 0 320 230" role="img" aria-label="A phone showing three missed calls after closing time">
+          <defs><linearGradient id="mg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FEE2E2"/><stop offset="1" stop-color="#F1F5F9"/></linearGradient></defs>
+          <path d="M28 122c0-62 52-104 132-104s132 32 132 98-60 102-136 102S28 186 28 122Z" fill="url(#mg)"/>
+          <circle cx="60" cy="60" r="17" fill="#94A3B8"/><circle cx="68" cy="53" r="15" fill="#FBE4E4"/>
+          <g transform="rotate(8 262 72)"><path d="M244 56l18-14 18 14" fill="none" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round"/><rect x="226" y="56" width="72" height="32" rx="8" fill="#fff" stroke="#E2E8F0" stroke-width="2"/><text x="262" y="77" text-anchor="middle" font-size="13" font-weight="800" fill="#B91C1C" font-family="Plus Jakarta Sans,Arial,sans-serif">CLOSED</text></g>
+          <g class="ring-shake" transform="rotate(-6 160 125)">
+            <rect x="112" y="40" width="96" height="172" rx="18" fill="#0F172A"/>
+            <rect x="119" y="48" width="82" height="156" rx="12" fill="#fff"/>
+            <rect x="146" y="53" width="28" height="6" rx="3" fill="#0F172A"/>
+            <g><rect x="125" y="70" width="70" height="28" rx="8" fill="#FEF2F2"/><circle cx="139" cy="84" r="8" fill="#EF4444"/><path d="M136 81l6 6M142 81l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/><rect x="152" y="77" width="34" height="5" rx="2.5" fill="#FCA5A5"/><rect x="152" y="86" width="22" height="4" rx="2" fill="#FECACA"/></g>
+            <g><rect x="125" y="104" width="70" height="28" rx="8" fill="#FEF2F2"/><circle cx="139" cy="118" r="8" fill="#EF4444"/><path d="M136 115l6 6M142 115l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/><rect x="152" y="111" width="30" height="5" rx="2.5" fill="#FCA5A5"/><rect x="152" y="120" width="24" height="4" rx="2" fill="#FECACA"/></g>
+            <g><rect x="125" y="138" width="70" height="28" rx="8" fill="#FEF2F2"/><circle cx="139" cy="152" r="8" fill="#EF4444"/><path d="M136 149l6 6M142 149l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/><rect x="152" y="145" width="36" height="5" rx="2.5" fill="#FCA5A5"/><rect x="152" y="154" width="18" height="4" rx="2" fill="#FECACA"/></g>
+            <rect x="125" y="174" width="70" height="20" rx="10" fill="#F1F5F9"/>
+          </g>
+          <circle cx="214" cy="50" r="18" fill="#EF4444" stroke="#fff" stroke-width="4"/><text x="214" y="56" text-anchor="middle" font-size="17" font-weight="800" fill="#fff" font-family="Plus Jakarta Sans,Arial,sans-serif">3</text>
+          <path d="M228 184c22 4 40 0 56-12" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 8"/><path d="M276 164l11 6-9 9" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="pill">Without an agent</span>
+        <h3>A missed call is a missed lead</h3>
+        <p>After hours, at lunch or on another call — the enquiry you didn't answer rings your competitor next.</p>
+      </aside>
+
+      <!-- 2. FORM -->
+      <form class="card" id="form" autocomplete="on">
+        <h2>Build my free AI agent</h2>
+        <p class="lead">No card, no app. Ready in about 25 seconds.</p>
+        <label for="name">Your name *</label>
+        <input id="name" name="name" required placeholder="James Smith" autocomplete="name">
+        <label for="company">Company name</label>
+        <input id="company" name="company" placeholder="Smith &amp; Sons Ltd" autocomplete="organization">
+        <label for="website">Company website *</label>
+        <input id="website" name="website" required inputmode="url" placeholder="www.yourcompany.co.uk" autocomplete="url">
+        <label for="email">Email *</label>
+        <input id="email" name="email" type="email" required placeholder="james@yourcompany.co.uk" autocomplete="email">
+        <label for="phone">Phone</label>
+        <div class="phone-row">
+          <select class="cc" id="cc" name="cc" aria-label="Country code"></select>
+          <input id="phone" name="phone" type="tel" inputmode="tel" placeholder="7700 900123" autocomplete="tel-national">
+        </div>
+        <label class="consent" for="consent">
+          <input type="checkbox" id="consent" name="consent" required>
+          <span>I understand and agree that PRAGNA AI may temporarily use publicly available content from my business website — such as text, business information, branding and website screenshots — solely to create and display a personalised AI demonstration. The demo is for illustration purposes only, is not a live production service, and the personalised demo page/link will expire after the demonstration period.</span>
+        </label>
+        <button class="btn" id="submitBtn" type="submit" disabled>Build my AI agent →</button>
+        <div class="err" id="err"></div>
+      </form>
+
+      <aside class="side win">
+        <svg class="floaty" viewBox="0 0 320 230" role="img" aria-label="A friendly voice agent wearing a headset answering a call">
+          <defs>
+            <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#DBEAFE"/><stop offset="1" stop-color="#E0F7FF"/></linearGradient>
+            <linearGradient id="jg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#45C9FD"/></linearGradient>
+          </defs>
+          <path d="M26 120c0-62 54-102 134-102s134 30 134 96-62 104-138 104S26 184 26 120Z" fill="url(#wg)"/>
+          <path d="M116 98c0-36 20-58 46-58s46 22 46 58v56c0 8-6 12-12 12h-68c-6 0-12-4-12-12Z" fill="#3B2416"/>
+          <rect x="150" y="128" width="24" height="30" rx="8" fill="#E8B48E"/>
+          <path d="M82 230c0-44 32-66 80-66s80 22 80 66Z" fill="url(#jg)"/>
+          <path d="M144 165l18 24 18-24-18 7Z" fill="#fff"/>
+          <ellipse cx="162" cy="98" rx="30" ry="35" fill="#F5C8A4"/>
+          <path d="M131 94c1-28 16-44 33-44 19 0 30 15 30 38-13-4-23-12-29-23-7 15-18 25-34 29Z" fill="#3B2416"/>
+          <ellipse cx="151" cy="101" rx="3" ry="3.6" fill="#0F172A"/><ellipse cx="173" cy="101" rx="3" ry="3.6" fill="#0F172A"/>
+          <circle cx="143" cy="112" r="5" fill="#F28B82" opacity=".45"/><circle cx="181" cy="112" r="5" fill="#F28B82" opacity=".45"/>
+          <path d="M151 115q11 9 22 0" fill="none" stroke="#B4513A" stroke-width="2.6" stroke-linecap="round"/>
+          <path d="M127 100c0-31 15-52 35-52s35 21 35 52" fill="none" stroke="#0F172A" stroke-width="5" stroke-linecap="round"/>
+          <rect x="119" y="92" width="14" height="26" rx="7" fill="#0F172A"/><rect x="191" y="92" width="14" height="26" rx="7" fill="#0F172A"/>
+          <path d="M126 118c0 16 10 21 25 21" fill="none" stroke="#0F172A" stroke-width="3.5" stroke-linecap="round"/><rect x="150" y="134" width="15" height="10" rx="5" fill="#2563EB"/>
+          <path d="M226 34h60a12 12 0 0 1 12 12v32a12 12 0 0 1-12 12h-38l-15 12 3-12h-10a12 12 0 0 1-12-12V46a12 12 0 0 1 12-12Z" fill="#fff" stroke="#BFDBFE" stroke-width="2"/>
+          <g class="talkbars" fill="url(#jg)"><rect x="228" y="57" width="5" height="10" rx="2.5"/><rect x="237" y="51" width="5" height="22" rx="2.5"/><rect x="246" y="45" width="5" height="34" rx="2.5"/><rect x="255" y="53" width="5" height="18" rx="2.5"/><rect x="264" y="48" width="5" height="28" rx="2.5"/><rect x="273" y="55" width="5" height="14" rx="2.5"/><rect x="282" y="58" width="5" height="8" rx="2.5"/></g>
+          <circle cx="62" cy="80" r="26" fill="#fff" stroke="#BBF7D0" stroke-width="2"/>
+          <path d="M52 71c0 11 8 19 19 19l3-6-6-4-3 3c-3-1-5-3-6-6l3-3-4-6Z" fill="#22C55E"/>
+          <circle cx="83" cy="60" r="11" fill="#22C55E" stroke="#fff" stroke-width="3"/><path d="M78 60l4 4 6-7" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect x="30" y="150" width="62" height="28" rx="14" fill="#0F172A"/><text x="61" y="169" text-anchor="middle" font-size="14" font-weight="800" fill="#fff" font-family="Plus Jakarta Sans,Arial,sans-serif">24/7</text>
+          <rect x="238" y="136" width="62" height="52" rx="12" fill="#fff" stroke="#BFDBFE" stroke-width="2"/><path d="M238 148a12 12 0 0 1 12-12h38a12 12 0 0 1 12 12v6h-62Z" fill="#2563EB"/><path d="M258 171l8 8 14-15" fill="none" stroke="#22C55E" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="pill">With Pragna AI</span>
+        <h3>Never miss a lead again</h3>
+        <p>Your AI voice agent picks up straight away, 24/7 — answers questions, qualifies the lead and books the meeting.</p>
+      </aside>
+    </div>
+
+    <div class="steps3">
+      <div class="step"><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><circle cx="20" cy="20" r="10"/><path d="M10 20h20M20 10c4 3 4 17 0 20M20 10c-4 3-4 17 0 20"/></svg><div><b>1. Enter your website</b><span>We read your public pages — services, hours, FAQs.</span></div></div>
+      <div class="step"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="12" fill="#EFF6FF"/><rect x="10" y="10" width="9" height="9" rx="3" fill="#45C9FD"/><rect x="21" y="10" width="9" height="9" rx="3" fill="#3396F5"/><rect x="10" y="21" width="9" height="9" rx="3" fill="#2563EB"/><rect x="21" y="21" width="9" height="9" rx="3" fill="#45C9FD"/></svg><div><b>2. We build your agent</b><span>Trained on your business in about 25 seconds.</span></div></div>
+      <div class="step"><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><rect x="16" y="9" width="8" height="14" rx="4"/><path d="M12 19a8 8 0 0 0 16 0M20 27v4"/></svg><div><b>3. Talk to it live</b><span>Tap the mic and ask it anything about your company.</span></div></div>
+    </div>
   </section>
 
   <!-- 3. PROGRESS (single bar) -->
   <section id="progress" class="card progress hidden">
-    <img src="/static/pragna-icon.png" alt="">
+    <div class="scene" aria-hidden="true">
+      <span class="spark a"></span><span class="spark b"></span><span class="spark c"></span>
+      <div class="blocks"><b></b><b></b><b></b><b></b></div>
+      <div class="mini-phone">
+        <i class="sk s1"></i><i class="sk s2"></i><i class="sk s3"></i><i class="sk s2"></i>
+        <div class="mini-card"><i class="sk s5"></i><div class="mini-mic"></div></div>
+      </div>
+      <div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    </div>
     <h3>Building your AI voice agent…</h3>
-    <p>This takes about 25 seconds</p>
+    <p id="caption">Reading your website</p>
     <div class="bar"><i id="barFill"></i></div>
     <div class="pct" id="pct">0%</div>
   </section>
 </main>
 
 <!-- 4. RESULT: phone preview with the agent widget inside -->
-<section id="result" class="stage hidden" style="padding:0 12px 30px">
-  <p class="stage-title">Your AI agent, live on <b id="siteName"></b></p>
+<section id="result" class="stage hidden">
+  <div class="info">
+    <span class="pill">✓ Your agent is ready</span>
+    <h2>Meet <span id="infoCompany">your company</span>'s AI voice agent</h2>
+    <p class="stage-title">Live preview on <b id="siteName"></b></p>
+    <ul class="perks">
+      <li>Tap the mic and ask about services, prices or opening hours</li>
+      <li>It answers from your own website, in a natural voice</li>
+      <li>On your real site it would take every call, 24/7</li>
+    </ul>
+    <a class="wa" id="waLink2" href="#" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5"/></svg>
+      Get this on my website
+    </a>
+  </div>
   <div class="phone">
     <div class="screen">
       <div class="urlbar">🔒 <span id="urlText"></span></div>
@@ -158,70 +377,70 @@
         <p class="w-desc" id="wDesc"></p>
         <div class="chips" id="wServices"></div>
         <div class="w-contact" id="wContact"></div>
+        <a class="wa" id="waLink" href="#" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5"/></svg>
+          <span id="waText">Chat with us on WhatsApp</span>
+        </a>
         <div class="bubble" id="wWelcome"></div>
         <div class="talk">
           <button class="mic-btn" id="talkBtn" type="button" aria-label="Talk to our AI agent">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></svg>
           </button>
-          <div class="talk-label" id="talkLabel">Tap to talk to our AI agent</div>
-          <div class="talk-status" id="talkStatus">Allow the microphone when asked.</div>
+          <div class="talk-text">
+            <div class="talk-label" id="talkLabel">Tap to talk to our AI agent</div>
+            <div class="talk-status" id="talkStatus">Allow the microphone when asked.</div>
+          </div>
         </div>
         <div class="powered">Powered by <img src="/static/pragna-logo.png" alt="Pragna AI"></div>
       </div>
     </div>
   </div>
-  <div class="warn hidden" id="warn"></div>
-  <div class="links"><button class="btn alt" id="restart" type="button">Try another website</button></div>
 </section>
+<div class="warn hidden" id="warn"></div>
 
 <footer>© Pragna AI <img src="/static/pragna-icon.png" alt=""></footer>
-
-<!-- 2. FORM (bottom sheet) -->
-<div class="sheet-bg hidden" id="sheet">
-  <form class="sheet card" id="form" autocomplete="on">
-    <div class="grab"></div>
-    <div class="sheet-head"><h2>Build my free AI agent</h2><button class="x" type="button" id="closeForm" aria-label="Close">×</button></div>
-    <label for="name">Your name *</label>
-    <input id="name" name="name" required placeholder="Srinivas Reddy" autocomplete="name">
-    <label for="company">Company name</label>
-    <input id="company" name="company" placeholder="Acme Dental" autocomplete="organization">
-    <label for="website">Company website *</label>
-    <input id="website" name="website" required inputmode="url" placeholder="www.yourcompany.com" autocomplete="url">
-    <label for="email">Email *</label>
-    <input id="email" name="email" type="email" required placeholder="you@company.com" autocomplete="email">
-    <label for="phone">Phone</label>
-    <input id="phone" name="phone" type="tel" placeholder="+91 98xxxxxxxx" autocomplete="tel">
-    <button class="btn" id="submitBtn" type="submit">Build my AI agent →</button>
-    <div class="err" id="err"></div>
-  </form>
-</div>
 
 <script>
 const API = "";                       // same origin. If backend is hosted elsewhere: "https://api.yourdomain.com"
 const PROGRESS_SECONDS = 25;          // length of the progress bar
-const DEFAULT_WIDGET_ID = "6abdf6d0b9739b959264b321";
+const DEFAULT_WIDGET_ID = "6abf5919cb9ce9d3ea4df163";
 const $ = id => document.getElementById(id);
 const txt = (el, s) => { el.textContent = s; return el; };
-let CFG = {widgetId: DEFAULT_WIDGET_ID, agentPhone: ""};
+let CFG = {widgetId: DEFAULT_WIDGET_ID, agentPhone: "", whatsapp: "+44 7446 952720"};
 fetch(API + "/api/config").then(r => r.json()).then(c => CFG = {...CFG, ...c, widgetId: c.widgetId || DEFAULT_WIDGET_ID}).catch(() => {});
 
-/* ---------- form sheet ---------- */
-const openSheet = () => { $("sheet").classList.remove("hidden"); setTimeout(() => $("name").focus(), 250); };
-const closeSheet = () => $("sheet").classList.add("hidden");
-$("openForm").onclick = openSheet;
-$("closeForm").onclick = closeSheet;
-$("sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeSheet(); });
+/* ---------- the form now sits on the page (no pop-up) ---------- */
+const openSheet = () => $("form").scrollIntoView({behavior: "smooth", block: "center"});
+const closeSheet = () => {};
+
+/* ---------- country codes + consent ---------- */
+const COUNTRIES = [["🇬🇧","GB","+44"],["🇮🇪","IE","+353"],["🇺🇸","US","+1"],["🇨🇦","CA","+1"],["🇦🇺","AU","+61"],["🇳🇿","NZ","+64"],
+  ["🇮🇳","IN","+91"],["🇦🇪","AE","+971"],["🇸🇦","SA","+966"],["🇶🇦","QA","+974"],["🇸🇬","SG","+65"],["🇲🇾","MY","+60"],["🇭🇰","HK","+852"],
+  ["🇿🇦","ZA","+27"],["🇳🇬","NG","+234"],["🇰🇪","KE","+254"],["🇩🇪","DE","+49"],["🇫🇷","FR","+33"],["🇪🇸","ES","+34"],["🇮🇹","IT","+39"],
+  ["🇳🇱","NL","+31"],["🇧🇪","BE","+32"],["🇨🇭","CH","+41"],["🇸🇪","SE","+46"],["🇳🇴","NO","+47"],["🇩🇰","DK","+45"],["🇵🇹","PT","+351"],
+  ["🇵🇱","PL","+48"],["🇵🇰","PK","+92"],["🇧🇩","BD","+880"],["🇱🇰","LK","+94"],["🇯🇵","JP","+81"],["🇧🇷","BR","+55"],["🇲🇽","MX","+52"]];
+COUNTRIES.forEach(([flag, iso, code], i) => {
+  const o = document.createElement("option"); o.value = code; o.textContent = flag + " " + iso + " " + code;
+  if (i === 0) o.selected = true;                        // United Kingdom by default
+  $("cc").appendChild(o);
+});
+$("consent").addEventListener("change", e => { $("submitBtn").disabled = !e.target.checked; });
 
 /* ---------- 25-second progress bar; real work runs in the background ---------- */
+const CAPTIONS = ["Reading your website", "Learning your services and FAQs", "Matching your brand colours",
+                  "Building your AI agent", "Tuning the voice", "Almost ready"];
 function runProgress(seconds){
   const start = performance.now();
-  let done = false, timer;
+  let done = false, timer, shown = -1;
+  const caption = i => { if (i === shown) return; shown = i; const c = $("caption");
+    c.classList.add("out"); setTimeout(() => { txt(c, CAPTIONS[i]); c.classList.remove("out"); }, 350); };
   const set = p => { $("barFill").style.width = p + "%"; txt($("pct"), Math.floor(p) + "%"); };
   const tick = () => {
     const t = (performance.now() - start) / 1000;
     let p = Math.min(95, (t / seconds) * 95);             // holds at 95% if the server is still working
     if (done) p = 100;
     set(p);
+    caption(Math.min(CAPTIONS.length - 1, Math.floor(t / (seconds / CAPTIONS.length))));
     if (!done) timer = requestAnimationFrame(tick);
   };
   set(0); tick();
@@ -234,7 +453,12 @@ function runProgress(seconds){
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
   $("err").style.display = "none";
+  if (!$("consent").checked) { $("err").textContent = "Please tick the consent box to continue."; $("err").style.display = "block"; return; }
   const body = Object.fromEntries(new FormData(e.target).entries());
+  const national = (body.phone || "").replace(/[^\d]/g, "").replace(/^0+/, "");   // 07700 900123 -> 7700900123
+  body.phone = national ? body.cc + national : "";
+  delete body.cc;
+  body.consent = true;
   closeSheet(); $("landing").classList.add("hidden"); $("progress").classList.remove("hidden");
   window.scrollTo(0, 0);
   const prog = runProgress(PROGRESS_SECONDS);
@@ -288,10 +512,21 @@ function showCompany(d){
   $("wServices").classList.toggle("hidden", !services.length);
 
   const rows = [...(c.phones||[]).slice(0,1).map(x => "📞 " + x), ...(c.emails||[]).slice(0,1).map(x => "✉️ " + x),
-                ...(c.hours||[]).slice(0,1).map(x => "🕘 " + x)];
+                ...(c.hours||[]).slice(0,1).map(x => "🕘 " + x)].slice(0, 2);
   $("wContact").innerHTML = "";
   rows.forEach(r => $("wContact").appendChild(txt(document.createElement("div"), r)));
 
+  // WhatsApp contact
+  const waDigits = (CFG.whatsapp || "").replace(/[^\d]/g, "");
+  $("waLink").classList.toggle("hidden", !waDigits);
+  $("waLink").href = "https://wa.me/" + waDigits + "?text=" +
+    encodeURIComponent("Hi Pragna AI, I just tried the AI voice agent demo for " + c.company_name + " and would like to know more.");
+  $("waLink2").href = $("waLink").href;
+  $("waLink2").classList.toggle("hidden", !waDigits);
+  txt($("infoCompany"), c.company_name);
+  txt($("waText"), "WhatsApp " + CFG.whatsapp);
+
+  applyTheme(d.theme);
   txt($("wWelcome"), d.welcomeMessage);
 
   const updated = d.agentStatus === "updated";
@@ -300,8 +535,19 @@ function showCompany(d){
                                "Check GHL_API_KEY, GHL_LOCATION_ID and GHL_AGENT_ID in .env and restart the server.");
 
   setTalk("idle");
-  $("progress").classList.add("hidden"); $("result").classList.remove("hidden");
+  $("progress").classList.add("hidden"); document.querySelector("main").classList.add("hidden");
+  $("result").classList.remove("hidden");
   window.scrollTo(0, 0);
+}
+
+/* ---------- use the scraped website's own brand colour inside the phone widget ---------- */
+function applyTheme(t){
+  const w = document.querySelector(".widget"), p = t && t.primary;
+  if (!p || !/^#[0-9a-f]{6}$/i.test(p)) { w.style.removeProperty("--site"); w.style.removeProperty("--on-site"); return; }
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(p.slice(i, i + 2), 16));
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  w.style.setProperty("--site", p);
+  w.style.setProperty("--on-site", lum > 0.62 ? "#0F172A" : "#fff");
 }
 
 /* ---------- talk button state (inside the phone widget) ---------- */
@@ -410,10 +656,6 @@ $("talkBtn").addEventListener("click", async () => {
   setTalk("error", "Couldn't load the voice agent. Check your connection and try again.");
 });
 
-$("restart").addEventListener("click", () => {
-  $("result").classList.add("hidden"); $("warn").classList.add("hidden");
-  $("landing").classList.remove("hidden"); $("form").reset(); window.scrollTo(0, 0);
-});
 </script>
 </body>
 </html>

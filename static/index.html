@@ -529,7 +529,10 @@ $("form").addEventListener("submit", async e => {
   } catch (ex) {
     prog.finish();
     $("progress").classList.add("hidden"); $("landing").classList.remove("hidden");
-    openSheet(); $("err").textContent = ex.message; $("err").style.display = "block";
+    const offline = ex instanceof TypeError;               // "Failed to fetch" = the server could not be reached
+    openSheet();
+    $("err").textContent = offline ? "We couldn't reach the server. Please reload the page and try again." : ex.message;
+    $("err").style.display = "block";
   }
 });
 

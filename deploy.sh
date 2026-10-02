@@ -18,7 +18,9 @@ main() {
 
   REPO="https://github.com/srinivasareddy-syamala/voice-demo.git"
   APP_DIR="/opt/voice-demo"
-  DOMAIN="${1:-vps-7263.onecom-cloud.one}"
+  BASE_DOMAIN="vps-7263.onecom-cloud.one"       # always served, so the site never goes offline
+  DOMAIN="${1:-$BASE_DOMAIN}"                   # optional extra address, e.g. try.pragna.ai
+  if [ "$DOMAIN" = "$BASE_DOMAIN" ]; then SITES="$BASE_DOMAIN"; else SITES="$BASE_DOMAIN, $DOMAIN"; fi
   APP_USER="voicedemo"
 
   if [ "$(id -u)" -ne 0 ]; then
@@ -119,7 +121,7 @@ EOF
   echo
   echo "==> [7/7] HTTPS web address (Caddy gets the certificate automatically)..."
   cat > /etc/caddy/Caddyfile <<EOF
-$DOMAIN {
+$SITES {
     encode gzip
     reverse_proxy 127.0.0.1:8000
 }
@@ -139,7 +141,10 @@ EOF
   fi
   echo
   echo "=================================================================="
-  echo "  Your website:   https://$DOMAIN"
+  echo "  Your website:   https://$BASE_DOMAIN"
+  if [ "$DOMAIN" != "$BASE_DOMAIN" ]; then
+    echo "  Also (once its DNS points to this server):   https://$DOMAIN"
+  fi
   echo "=================================================================="
   echo "  (the first visit can take up to a minute while HTTPS is set up)"
   echo

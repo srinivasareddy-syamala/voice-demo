@@ -92,7 +92,7 @@ FRAME_HTML = """<!doctype html>
       var args = arguments, url = String((args[0] && args[0].url) || args[0] || "");
       return orig.apply(this, args).then(function (res) {
         if (url.indexOf("start-voice-ai-call") !== -1) {
-          var noAgent = /\/undefined$/.test(url);
+          var noAgent = /\\/undefined$/.test(url);
           parent.postMessage({type: "voice", ok: res.status < 400, status: res.status, noAgent: noAgent}, "*");
         }
         return res;

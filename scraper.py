@@ -342,8 +342,10 @@ async def scrape_company(url: str, company_name: str = "") -> dict:
             if home_html:
                 url, base = candidate, urlparse(candidate)
                 break
+        rendered_home = False                       # True when the HTML came from headless Chrome
         if not home_html:
             home_html = await _render_js(url)
+            rendered_home = bool(home_html)
             if not home_html:
                 errors.append("headless browser: not available or blocked "
                               "(run: python -m playwright install chromium)")
@@ -358,7 +360,7 @@ async def scrape_company(url: str, company_name: str = "") -> dict:
         if len(_clean(home.get_text(" "))) < 300:  # probably a JS app shell
             rendered = await _render_js(url)
             if rendered:
-                home_html, home = rendered, BeautifulSoup(rendered, "lxml")
+                home_html, home, rendered_home = rendered, BeautifulSoup(rendered, "lxml"), True
 
         links = []
         for a in home.find_all("a", href=True):
@@ -380,6 +382,8 @@ async def scrape_company(url: str, company_name: str = "") -> dict:
     pages = [(url, home_html)] + [(l, h) for l, h in zip(links, sub) if h]
     profile = extract_profile(pages, url, company_name)
     profile["theme"] = theme_from_css(home, [c for c in css_texts if c])
+    # kept for the live phone preview (main.py re-serves this page into the phone); never sent to GHL
+    profile["_home_html"], profile["_home_url"], profile["_rendered"] = home_html, url, rendered_home
     return profile
 
 
@@ -594,8 +598,16 @@ async def mobile_preview(url: str, timeout_s: int = 30) -> dict:
                     theme = await page.evaluate(THEME_JS)
                 except Exception:
                     theme = None
+                # sites with no mobile design are wider than the phone: capture their full width so the
+                # picture shows the whole page zoomed out (as a real phone would), not a cropped corner
+                try:
+                    doc_w = int(await page.evaluate("document.documentElement.scrollWidth"))
+                except Exception:
+                    doc_w = 390
+                shot_w = min(max(390, doc_w), 1400)
+                shot_h = 1600 if shot_w <= 430 else int(shot_w * 2.2)
                 img = await page.screenshot(type="jpeg", quality=58, animations="disabled",
-                                            clip={"x": 0, "y": 0, "width": 390, "height": 1600},
+                                            clip={"x": 0, "y": 0, "width": shot_w, "height": shot_h},
                                             full_page=True)
             finally:
                 await b.close()

@@ -21,7 +21,8 @@ load_dotenv(".env")           # if you create one, it wins
 load_dotenv(".env.example")   # otherwise use the values in .env.example
 
 import ghl  # noqa: E402
-from persona import ACTION_BOOK, ACTION_SLOTS, build_agent_prompt, build_welcome  # noqa: E402
+from persona import (ACTION_BOOK, ACTION_CANCEL, ACTION_CHANGE, ACTION_SLOTS,  # noqa: E402
+                     build_agent_prompt, build_welcome)
 from scraper import mobile_preview, scrape_company  # noqa: E402
 
 # The chat + call widget shown inside the phone preview. Fixed in code on purpose: an old
@@ -312,8 +313,10 @@ async def train(req: TrainRequest, request: Request):
     if not req.consent:
         raise HTTPException(400, "Please tick the consent box to continue.")
     visitor = req.model_dump()
-    # make sure the voice agent has its two booking actions (first run creates them in GHL)
+    # make sure the voice agent has its booking actions (first run creates them in GHL)
     actions_task = asyncio.create_task(ensure_booking_actions(public_base(request)))
+    if booking_enabled():
+        bg(booking_config())                      # look up calendar + pipeline now, so the first booking is quick
     consent_line = "Consent to use public website content for the demo: YES (" + \
                    time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")"
 
@@ -346,9 +349,13 @@ async def train(req: TrainRequest, request: Request):
 
     # remember this lead so the agent (or the button on the page) can book an appointment for them
     lead = new_lead(visitor, data["company_name"], data["website"])
-    can_book = await actions_task
-    prompt = build_agent_prompt(data, visitor, {"ref": lead["ref"], "tz": lead["tz"],
-                                                "now": datetime.now(get_tz(lead["tz"]))} if can_book else None)
+    can_book = await actions_task                 # "reply", "send" or ""
+    first = await contact_task
+    lead["contactId"] = (first or {}).get("id") or "" if isinstance(first, dict) else ""
+    had = await current_booking(lead) if can_book and lead["contactId"] else None   # booked in an earlier visit?
+    prompt = build_agent_prompt(data, visitor, {
+        "ref": lead["ref"], "tz": lead["tz"], "now": datetime.now(get_tz(lead["tz"])),
+        "replies": can_book == "reply", "existing": (had or {}).get("when", "")} if can_book else None)
     welcome = build_welcome(data, visitor)
 
     # run in parallel: train GHL agent, save contact, take mobile screenshot of the site
@@ -377,7 +384,7 @@ async def train(req: TrainRequest, request: Request):
 
     agent_status, contact, preview = await asyncio.gather(
         update_agent(), save_contact(), mobile_preview(data["website"]))
-    lead["contactId"] = (contact or {}).get("id") or ""
+    lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
     save_state()
     # brand colour: what the page really renders, else what its stylesheets say
     theme = preview.get("theme") if (preview.get("theme") or {}).get("primary") else data.get("theme")
@@ -398,21 +405,26 @@ async def train(req: TrainRequest, request: Request):
         "theme": theme,
         "bookingRef": lead["ref"] if booking_enabled() else "",
         "agentCanBook": bool(can_book),
+        "booking": booking_status(lead["ref"]),
     }
 
 
 # ================================================================ appointments + opportunities
-# During the demo call the agent asks "would you like to book an appointment?". If yes it calls
-# /api/ghl/slots and /api/ghl/book (two "custom actions" this server registers on the GHL agent).
-# Booking creates the appointment in the GHL calendar, an opportunity in the pipeline and a note
-# on the contact. The same two addresses power the "Book an appointment" button on the page.
-STATE_FILE = Path(__file__).with_name(".demo_state.json")     # action ids + recent leads (no email/phone)
-STATE: dict = {"actions": {}, "leads": {}}
+# During the demo call the agent asks "would you like to book an appointment?". It can then book, change
+# and cancel through four "custom actions" this server registers on the GHL agent:
+#   /api/ghl/slots  /api/ghl/book  /api/ghl/change  /api/ghl/cancel
+# Booking creates the appointment in the GHL calendar, an opportunity in the pipeline and a note on the
+# contact. The same addresses power the "Book an appointment" button on the page.
+# /api/booking/check?loc=<GHL location id> shows what is working and what GHL refused.
+STATE_FILE = Path(__file__).with_name(".demo_state.json")     # action ids, recent leads (no email/phone), call log
+STATE: dict = {"actions": {}, "leads": {}, "events": []}
 try:
     STATE.update(json.loads(STATE_FILE.read_text(encoding="utf-8")))
 except (OSError, ValueError):
     pass
 LEADS: dict[str, dict] = STATE.setdefault("leads", {})
+EVENTS: list[dict] = STATE.setdefault("events", [])           # what the agent / page asked for, and the outcome
+_bg: set = set()                                              # background jobs (kept so they are not dropped)
 _actions_lock = asyncio.Lock()
 _book_lock = asyncio.Lock()
 _bcfg: dict = {"ts": 0.0, "v": None}
@@ -422,9 +434,22 @@ REF_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"                # no 0/O/1/I - eas
 def save_state() -> None:
     try:
         keep = {r: {k: v for k, v in l.items() if k not in ("email", "phone")} for r, l in LEADS.items()}
-        STATE_FILE.write_text(json.dumps({"actions": STATE.get("actions", {}), "leads": keep}), encoding="utf-8")
+        STATE_FILE.write_text(json.dumps({"actions": STATE.get("actions", {}), "leads": keep, "events": EVENTS[-60:]}),
+                              encoding="utf-8")
     except OSError as e:
         print("[booking] could not save state:", e)
+
+
+def log_event(kind: str, source: str, status: str, detail: str = "") -> None:
+    EVENTS.append({"ts": time.time(), "kind": kind, "source": source, "status": status, "detail": detail[:200]})
+    del EVENTS[:-60]
+    save_state()
+
+
+def bg(coro) -> None:
+    t = asyncio.create_task(coro)
+    _bg.add(t)
+    t.add_done_callback(_bg.discard)
 
 
 def booking_enabled() -> bool:
@@ -453,7 +478,7 @@ def tz_name(tz) -> str:
 
 def new_lead(visitor: dict, company: str, website: str) -> dict:
     now = time.time()
-    for r in [r for r, l in LEADS.items() if now - l.get("ts", 0) > 86400]:
+    for r in [r for r, l in LEADS.items() if now - l.get("ts", 0) > (45 * 86400 if l.get("booking") else 86400)]:
         LEADS.pop(r, None)
     while len(LEADS) >= 200:
         LEADS.pop(min(LEADS, key=lambda r: LEADS[r].get("ts", 0)), None)
@@ -478,58 +503,77 @@ def public_base(request: Request) -> str:
     return f"https://{host}"
 
 
-def _action_params(kind: str, base: str) -> dict:
+ACTION_NAMES = {"slots": ACTION_SLOTS, "book": ACTION_BOOK, "change": ACTION_CHANGE, "cancel": ACTION_CANCEL}
+ACTION_TEXT = {   # kind: (when the agent should use it, what it says meanwhile)
+    "slots": ("When the caller would like to book or change an appointment and you need to know which days and times "
+              "are free, or the caller asks what times are available.", "Let me check the calendar for you."),
+    "book": ("When the caller has agreed to book an appointment and has chosen a specific day and time.",
+             "One moment, I'm booking that for you."),
+    "change": ("When the caller already has an appointment and wants to move it to a different day or time, "
+               "and has told you the new day and time.", "One moment, I'm changing that for you."),
+    "cancel": ("When the caller has confirmed that they want to cancel their appointment.",
+               "One moment, I'm cancelling that for you."),
+}
+
+
+def _action_params(kind: str, base: str, method: str = "GET") -> dict:
+    """GET = the agent hears our answer (status + message). POST = send only, used when GHL refuses GET."""
     ref = {"name": "booking_reference", "type": "string", "example": "K7Q2M9XA",
            "description": "The booking reference given in your instructions. Always send it exactly."}
     day = {"name": "date", "type": "string", "example": "2026-10-08",
            "description": "The day as YYYY-MM-DD." + (" Leave empty to get the next free days." if kind == "slots" else "")}
     tm = {"name": "time", "type": "string", "example": "14:30", "description": "The time the caller chose, 24-hour HH:MM."}
-    api = {"url": f"{base}/api/ghl/{kind}", "method": "GET", "authenticationRequired": True,
+    params = {"slots": [ref, day], "book": [ref, day, tm], "change": [ref, day, tm], "cancel": [ref]}[kind]
+    api = {"url": f"{base}/api/ghl/{kind}", "method": method, "authenticationRequired": True,
            "authenticationValue": booking_secret(),
-           "headers": [{"key": "X-Booking-Key", "value": booking_secret()}],
-           "parameters": [ref, day] + ([tm] if kind == "book" else [])}
-    if kind == "slots":
-        return {"triggerPrompt": "When the caller would like to book an appointment and you need to know which days and "
-                                 "times are free, or the caller asks what times are available.",
-                "triggerMessage": "Let me check the calendar for you.", "apiDetails": api,
-                "selectedPaths": ["status", "message"]}
-    return {"triggerPrompt": "When the caller has agreed to book an appointment and has chosen a specific day and time.",
-            "triggerMessage": "One moment, I'm booking that for you.", "apiDetails": api,
-            "selectedPaths": ["status", "message"]}
+           "headers": [{"key": "X-Booking-Key", "value": booking_secret()}], "parameters": params}
+    return {"triggerPrompt": ACTION_TEXT[kind][0], "triggerMessage": ACTION_TEXT[kind][1], "apiDetails": api,
+            "selectedPaths": ["status", "message"] if method == "GET" else []}
 
 
-async def ensure_booking_actions(base: str) -> bool:
-    """Create (once) or repair the two booking actions on the GHL voice agent. True = the agent can book."""
+async def ensure_booking_actions(base: str, force: bool = False) -> str:
+    """Create (once) or repair the booking actions on the GHL voice agent.
+    Returns "reply" (agent books and hears the answer), "send" (agent can only send the request) or "" (cannot book)."""
     if not base or not booking_enabled():
-        return False
+        return ""
     async with _actions_lock:
         st = STATE.setdefault("actions", {})
         now = time.time()
-        if st.get("base") == base and st.get("slots") and st.get("book") and now - st.get("checked", 0) < 3600:
-            return True
-        if now - st.get("failed", 0) < 300:           # e.g. token has no permission: don't retry on every visitor
-            return False
+        ready = all(st.get(k) for k in ACTION_NAMES)
+        if not force:
+            if st.get("base") == base and ready and now - st.get("checked", 0) < 3600:
+                return st.get("mode", "reply")
+            if now - st.get("failed", 0) < 300:       # e.g. token has no permission: don't retry on every visitor
+                return ""
         existing = await ghl.agent_actions()          # None = could not read the agent
-        ok = True
-        for kind, name in (("slots", ACTION_SLOTS), ("book", ACTION_BOOK)):
+        methods, errors = {}, []
+        for kind, name in ACTION_NAMES.items():
             url = f"{base}/api/ghl/{kind}"
-            found = next((a for a in existing or [] if a.get("name") == name), None)
+            found = next((x for x in existing or [] if x.get("name") == name), None)
             aid = (found or {}).get("id") or ("" if existing is not None else st.get(kind, ""))
             if found and found.get("url") == url:
-                st[kind] = aid
+                st[kind], methods[kind] = aid, (found.get("method") or "GET").upper()
                 continue
-            res = await ghl.save_custom_action(name, _action_params(kind, base), aid)
+            res = await ghl.save_custom_action(name, _action_params(kind, base, "GET"), aid)
+            method = "GET"
+            if not res.get("id") and res.get("status") in (400, 422):     # this account wants POST: send-only
+                res = await ghl.save_custom_action(name, _action_params(kind, base, "POST"), aid)
+                method = "POST"
             if res.get("id"):
-                st[kind] = res["id"]
-                print(f"[booking] agent action '{name}' ready -> {url}")
+                st[kind], methods[kind] = res["id"], method
+                print(f"[booking] agent action '{name}' ready ({method}) -> {url}")
             else:
-                ok = False
                 st.pop(kind, None)
+                errors.append(f"{name}: {res.get('error')}")
                 print(f"[booking] could NOT add the '{name}' action to the voice agent: {res.get('error')}\n"
                       "          The token needs the scope voice-ai-agent-goals.write (Settings > Private Integrations).")
-        st.update({"base": base, "checked": now} if ok else {"failed": now})
+        ok = not errors
+        mode = "reply" if all(m == "GET" for m in methods.values()) else "send"
+        st.pop("failed", None) if ok else st.pop("checked", None)
+        st.update({"base": base, "checked": now, "mode": mode, "error": ""} if ok
+                  else {"failed": now, "error": "; ".join(errors)[:500]})
         save_state()
-        return ok
+        return mode if ok else ""
 
 
 async def booking_config() -> dict:
@@ -678,40 +722,75 @@ def _speak_slots(by_day: dict, max_days: int = 3, per_day: int = 3) -> str:
 
 
 async def _args(request: Request) -> dict:
-    """Values sent by the voice agent: in the address (GET) or in the body (POST)."""
-    a = dict(request.query_params)
+    """What the voice agent (or the page) sent: in the address, as JSON or as a form - flat or nested.
+    Names are compared without case, spaces or underscores, so bookingReference == booking_reference."""
+    found: dict[str, str] = {}
+
+    def take(obj, depth=0):
+        if not isinstance(obj, dict) or depth > 4:
+            return
+        for k, v in obj.items():
+            if isinstance(v, (str, int, float)) and not isinstance(v, bool):
+                found.setdefault(re.sub(r"[^a-z]", "", str(k).lower()), str(v).strip())
+        for v in obj.values():
+            take(v, depth + 1)
+
+    take(dict(request.query_params))
     if request.method == "POST":
+        raw = (await request.body()).decode("utf-8", "ignore")
         try:
-            body = await request.json()
-            if isinstance(body, dict):
-                a.update({k: v for k, v in body.items() if isinstance(v, (str, int, float))})
+            take(json.loads(raw))
         except ValueError:
-            pass
-    return {k: str(v).strip() for k, v in a.items()}
+            from urllib.parse import parse_qsl
+            take(dict(parse_qsl(raw)))
+    return found
 
 
-def _find_lead(request: Request, a: dict) -> dict | None:
-    """Who is this booking for? The reference in the agent's instructions says so. A caller that proves it is
-    our GHL agent (secret key) but sent no usable reference gets the most recent lead - the agent is shared."""
-    sent = (request.headers.get("x-booking-key") or a.get("key") or
-            re.sub(r"^bearer\s+", "", request.headers.get("authorization") or "", flags=re.I))
-    key_ok = bool(sent) and hmac.compare_digest(sent.strip(), booking_secret())
-    ref = re.sub(r"[^A-Z0-9]", "", (a.get("booking_reference") or a.get("ref") or "").upper())
-    if ref in LEADS:
-        return LEADS[ref]
-    recent = [l for l in LEADS.values() if time.time() - l.get("ts", 0) < 7200]
-    if key_ok and recent:
-        return max(recent, key=lambda l: l["ts"])
-    if not key_ok:
+def _pick(a: dict, *names: str) -> str:
+    return next((a[n] for n in names if a.get(n)), "")
+
+
+def _when_args(a: dict) -> tuple[str, str]:
+    return (_pick(a, "date", "day", "appointmentdate", "newdate", "datetime"),
+            _pick(a, "time", "appointmenttime", "newtime", "starttime"))
+
+
+def _caller(request: Request, a: dict, kind: str) -> tuple[dict | None, str]:
+    """Who is this for, and who is asking ("agent" or "page")? The reference in the agent's instructions names
+    the lead. A caller that proves it is our GHL agent (secret key) but sent no usable reference gets the most
+    recent lead - there is one shared agent, and its instructions were written for that lead."""
+    secret = booking_secret()
+    key_ok = a.get("key") == secret or any(secret in v for v in request.headers.values())
+    source = "page" if a.get("src") == "page" else "agent"
+    ref = re.sub(r"[^A-Z0-9]", "", _pick(a, "bookingreference", "ref", "reference", "bookingref").upper())
+    lead = LEADS.get(ref)
+    if not lead and key_ok:
+        recent = [l for l in LEADS.values() if time.time() - l.get("ts", 0) < 7200]
+        lead = max(recent, key=lambda l: l["ts"]) if recent else None
+    if not lead and not key_ok:
+        log_event(kind, source, "denied", f"no valid reference or key; sent: {', '.join(sorted(a)) or 'nothing'}")
         raise HTTPException(401, "Unknown booking reference")
-    return None
+    return lead, source
+
+
+def _done(kind: str, source: str, lead: dict | None, res: dict, a: dict) -> dict:
+    print(f"[booking] {kind} via {source} {(lead or {}).get('ref', '-')}: {res['status']} - {res['message'][:140]}")
+    log_event(kind, source, res["status"], f"{res['message'][:120]} | sent: {', '.join(sorted(k for k in a if k not in ('key', 'src')))}")
+    return res
+
+
+NO_BOOKING = {"status": "error", "message": "I could not complete that. Apologise and say the team will contact them to arrange it."}
 
 
 @app.api_route("/api/ghl/slots", methods=["GET", "POST"])
 async def ghl_slots(request: Request):
     """Free appointment times. Used by the voice agent ("Check appointment times") and by the page."""
     a = await _args(request)
-    lead = _find_lead(request, a)
+    lead, source = _caller(request, a, "slots")
+    return _done("slots", source, lead, await slots_for(lead, _when_args(a)[0]), a)
+
+
+async def slots_for(lead: dict | None, date_s: str) -> dict:
     if not booking_enabled():
         return {"status": "error", "message": "Booking is not available right now. The team will contact the caller to arrange a time."}
     tz = get_tz((lead or {}).get("tz", ""))
@@ -720,7 +799,7 @@ async def ghl_slots(request: Request):
     if not cfg["calendarId"]:
         return {"status": "error", "message": "The calendar is not available right now. Ask which day and time they prefer "
                                               "and say the team will confirm it."}
-    day = parse_day(a.get("date", ""), now.date())
+    day = parse_day(date_s, now.date())
     start = datetime.combine(day, datetime.min.time(), tzinfo=tz) if day and day >= now.date() else now
     by_day = await open_slots(cfg["calendarId"], tz, start, 1 if day else 7)
     if day and not by_day:                                   # nothing that day -> look at the following week
@@ -739,20 +818,111 @@ async def ghl_slots(request: Request):
             "message": f"{prefix}Free times ({tz_name(tz)} time): {_speak_slots(by_day)}. Offer two or three of these."}
 
 
+async def _book_request(request: Request, kind: str):
+    a = await _args(request)
+    lead, source = _caller(request, a, kind)
+    if not lead or not booking_enabled():
+        return _done(kind, source, lead, dict(NO_BOOKING), a)
+    date_s, time_s = _when_args(a)
+    async with _book_lock:
+        res = await book_for(lead, date_s, time_s, source)
+    return _done(kind, source, lead, res, a)
+
+
 @app.api_route("/api/ghl/book", methods=["GET", "POST"])
 async def ghl_book(request: Request):
     """Book the appointment: GHL calendar event + opportunity + note. Used by the voice agent and by the page."""
+    return await _book_request(request, "book")
+
+
+@app.api_route("/api/ghl/change", methods=["GET", "POST"])
+async def ghl_change(request: Request):
+    """Move the appointment to a new day/time (books one if they had none)."""
+    return await _book_request(request, "change")
+
+
+@app.api_route("/api/ghl/cancel", methods=["GET", "POST"])
+async def ghl_cancel(request: Request):
+    """Cancel the appointment (it stays in the GHL calendar marked as cancelled) and add a note."""
     a = await _args(request)
-    lead = _find_lead(request, a)
+    lead, source = _caller(request, a, "cancel")
     if not lead or not booking_enabled():
-        return {"status": "error", "message": "I could not complete the booking. Apologise and say the team will contact them to arrange a time."}
+        return _done("cancel", source, lead, dict(NO_BOOKING), a)
     async with _book_lock:
-        res = await book_for(lead, a.get("date", ""), a.get("time", ""))
-    print(f"[booking] {lead['ref']} {lead.get('company')}: {res['status']} - {res['message'][:140]}")
-    return res
+        res = await cancel_for(lead)
+    return _done("cancel", source, lead, res, a)
 
 
-async def book_for(lead: dict, date_s: str, time_s: str) -> dict:
+def _parse_when(value, tz) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace(" ", "T").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.astimezone(tz) if dt.tzinfo else dt.replace(tzinfo=tz)
+
+
+async def current_booking(lead: dict) -> dict | None:
+    """The appointment this person has now: booked in this visit, in an earlier visit (same GHL contact),
+    or - if this server has no record - whatever GHL shows for the contact in our calendar."""
+    tz = get_tz(lead.get("tz", ""))
+    now = datetime.now(tz)
+
+    def live(b) -> bool:
+        when = _parse_when((b or {}).get("start", ""), tz)
+        return bool(b and b.get("appointmentId") and not b.get("cancelled") and when and when > now)
+
+    if live(lead.get("booking")):
+        return lead["booking"]
+    cid = lead.get("contactId")
+    if not cid:
+        return None
+    for other in sorted(LEADS.values(), key=lambda l: -l.get("ts", 0)):
+        if other is not lead and other.get("contactId") == cid and live(other.get("booking")):
+            lead["booking"] = dict(other["booking"])
+            return lead["booking"]
+    if (lead.get("booking") or {}).get("cancelled") or time.time() - lead.get("lookedUp", 0) < 600:
+        return None                                           # we cancelled it ourselves / asked GHL a moment ago
+    lead["lookedUp"] = time.time()
+    cfg = await booking_config()
+    upcoming = []
+    for ev in await ghl.contact_appointments(cid):
+        when = _parse_when(ev.get("startTime", ""), tz)
+        if (when and when > now and ev.get("id") and ev.get("calendarId") == cfg["calendarId"]
+                and (ev.get("appointmentStatus") or ev.get("appoinmentStatus") or "").lower() not in ("cancelled", "invalid")
+                and not ev.get("deleted")):
+            upcoming.append((when, ev))
+    if not upcoming:
+        return None
+    when, ev = min(upcoming, key=lambda x: x[0])
+    lead["booking"] = {"start": when.isoformat(), "when": f"{fmt_day(when)} at {fmt_time(when)}",
+                       "appointmentId": ev["id"], "calendarId": ev.get("calendarId"), "opportunityId": ""}
+    return lead["booking"]
+
+
+async def _after_booking(lead: dict, cfg: dict, headline: str, lines: str, with_opportunity: bool = True) -> None:
+    """Runs after we have answered the agent (so the caller is not kept waiting): opportunity + note."""
+    brand = os.getenv("BRAND_NAME", "Pragna AI")
+    cid = lead.get("contactId")
+    name, company = lead.get("name") or "the visitor", lead.get("company") or lead.get("website") or "their company"
+    opp_line = ""
+    if with_opportunity:
+        opp = {}
+        if cfg["pipelineId"]:
+            opp = await ghl.save_opportunity(cid, f"{company} - AI voice agent demo ({name})", cfg["pipelineId"], cfg["stageId"])
+        if opp.get("id"):
+            if lead.get("booking"):
+                lead["booking"]["opportunityId"] = opp["id"]
+                save_state()
+            opp_line = (f"Opportunity {'created' if opp.get('new') else 'updated'} in pipeline \"{cfg['pipelineName'] or cfg['pipelineId']}\""
+                        + (f", stage \"{cfg['stageName']}\"" if cfg["stageName"] else "")) + "\n"
+        else:
+            opp_line = f"Opportunity NOT created ({opp.get('error') or 'no pipeline found in GHL'})\n"
+            log_event("opportunity", "server", "error", opp_line.strip())
+    await ghl.add_note(cid, f"{brand} voice demo - {headline}\n\n{lines}\n{opp_line}Company: {company}\nWebsite: {lead.get('website') or '-'}")
+
+
+async def book_for(lead: dict, date_s: str, time_s: str, source: str = "agent") -> dict:
+    """Book an appointment, or move the one they already have."""
     brand = os.getenv("BRAND_NAME", "Pragna AI")
     tz = get_tz(lead.get("tz", ""))
     now = datetime.now(tz)
@@ -768,9 +938,6 @@ async def book_for(lead: dict, date_s: str, time_s: str) -> dict:
         return {"status": "unavailable", "message": f"{when} has already passed or is too soon. Ask for a later day or time."}
     if start > now + timedelta(days=60):
         return {"status": "unavailable", "message": "That is too far ahead. Ask for a day within the next few weeks."}
-    old = lead.get("booking") or {}
-    if old.get("appointmentId") and old.get("start") == start.isoformat():
-        return {"status": "booked", "message": f"Already booked: {when} ({tz_name(tz)} time).", "when": when, "start": old["start"]}
 
     cfg = await booking_config()
     name, company = lead.get("name") or "the visitor", lead.get("company") or lead.get("website") or "their company"
@@ -778,7 +945,11 @@ async def book_for(lead: dict, date_s: str, time_s: str) -> dict:
         lead["contactId"] = (await ghl.upsert_contact(lead, company, lead.get("website", ""))).get("id") or ""
     cid = lead.get("contactId")
     if not cid:
-        return {"status": "error", "message": "I could not complete the booking. Apologise and say the team will contact them to arrange a time."}
+        return dict(NO_BOOKING)
+    old = await current_booking(lead) or {}
+    if old and _parse_when(old.get("start", ""), tz) == start:
+        return {"status": "booked", "message": f"Already booked: {when} ({tz_name(tz)} time).", "when": when, "start": old["start"]}
+    one_way = source == "agent" and STATE.get("actions", {}).get("mode") == "send"   # the agent will not hear our answer
 
     appt, problem = {}, ""
     if not cfg["calendarId"]:
@@ -792,13 +963,19 @@ async def book_for(lead: dict, date_s: str, time_s: str) -> dict:
             else:
                 later = await open_slots(cfg["calendarId"], tz, start, 8) or {}
                 alts = f"Other free times: {_speak_slots(later)}" if later else "There are no other free times this week"
+            if one_way:
+                bg(_after_booking(lead, cfg, "APPOINTMENT REQUESTED (that time is not free)",
+                                  f"Requested time: {when} ({tz_name(tz)})\n{alts}.\nPlease contact them to agree a time."))
             return {"status": "unavailable", "message": f"{when} is not available. {alts}. Ask which one they would like."}
         end = (start + timedelta(minutes=cfg["slotMins"])).isoformat()
         title = f"{brand} demo call - {company} ({name})"
         desc = (f"Booked from the {brand} voice agent demo.\nName: {name}\nCompany: {company}\n"
                 f"Website: {lead.get('website') or '-'}\nVisitor timezone: {tz_name(tz)}")
         if old.get("appointmentId"):                                               # they changed the time
-            appt = await ghl.move_appointment(old["appointmentId"], cfg["calendarId"], start.isoformat(), end)
+            appt = await ghl.move_appointment(old["appointmentId"], old.get("calendarId") or cfg["calendarId"], start.isoformat(), end)
+            moved = bool(appt.get("id"))
+        else:
+            moved = False
         if not appt.get("id"):
             appt = await ghl.create_appointment(cfg["calendarId"], cid, start.isoformat(), end, title, desc)
         if not appt.get("id"):
@@ -806,33 +983,153 @@ async def book_for(lead: dict, date_s: str, time_s: str) -> dict:
                 return {"status": "unavailable", "message": f"{when} is not available. Ask for another day or time."}
             problem = f"GHL refused the appointment ({appt.get('error')})"
 
-    # the opportunity is created either way: they asked for an appointment, so they are a real lead
-    opp = {}
-    if cfg["pipelineId"]:
-        opp = await ghl.save_opportunity(cid, f"{company} - AI voice agent demo ({name})", cfg["pipelineId"], cfg["stageId"])
-    opp_line = (f"Opportunity {'created' if opp.get('new') else 'updated'} in pipeline \"{cfg['pipelineName'] or cfg['pipelineId']}\""
-                + (f", stage \"{cfg['stageName']}\"" if cfg["stageName"] else "")) if opp.get("id") else \
-               f"Opportunity NOT created ({opp.get('error') or 'no pipeline found in GHL'})"
-    if problem:
+    if problem:                 # the opportunity is still created: they asked for an appointment, so they are a real lead
         print("[booking] appointment not created:", problem)
-        await ghl.add_note(cid, f"{brand} voice demo - APPOINTMENT REQUESTED (not booked automatically)\n\n"
-                                f"Requested time: {when} ({tz_name(tz)})\nReason: {problem}\n{opp_line}\n\nPlease contact them to confirm a time.")
+        bg(_after_booking(lead, cfg, "APPOINTMENT REQUESTED (not booked automatically)",
+                          f"Requested time: {when} ({tz_name(tz)})\nReason: {problem}\nPlease contact them to confirm a time."))
         return {"status": "error", "message": "I could not book it in the calendar. Apologise, say their preferred time has been "
                                               f"passed to the {brand} team, who will contact them to confirm."}
-    lead["booking"] = {"start": start.isoformat(), "when": when, "appointmentId": appt["id"], "opportunityId": opp.get("id", "")}
+    lead["booking"] = {"start": start.isoformat(), "when": when, "appointmentId": appt["id"], "calendarId": cfg["calendarId"],
+                       "opportunityId": old.get("opportunityId", "")}
     save_state()
-    await ghl.add_note(cid, f"{brand} voice demo - APPOINTMENT BOOKED\n\nWhen: {when} ({tz_name(tz)})\n"
-                            f"Calendar: {cfg['calendarName'] or cfg['calendarId']}\n{opp_line}\nCompany: {company}\nWebsite: {lead.get('website') or '-'}")
+    cal = cfg["calendarName"] or cfg["calendarId"]
+    if moved:
+        bg(_after_booking(lead, cfg, "APPOINTMENT CHANGED",
+                          f"New time: {when} ({tz_name(tz)})\nPrevious time: {old.get('when', '-')}\nCalendar: {cal}"))
+        return {"status": "rescheduled", "when": when, "start": start.isoformat(),
+                "message": f"Changed. The appointment is now on {when} ({tz_name(tz)} time). Read this back to them."}
+    bg(_after_booking(lead, cfg, "APPOINTMENT BOOKED", f"When: {when} ({tz_name(tz)})\nCalendar: {cal}"))
     return {"status": "booked", "when": when, "start": start.isoformat(),
             "message": f"Booked. The appointment with the {brand} team is on {when} ({tz_name(tz)} time). Read this back to them."}
 
 
+async def cancel_for(lead: dict) -> dict:
+    cfg = await booking_config()
+    old = await current_booking(lead)
+    if not old:
+        return {"status": "none", "message": "There is no upcoming appointment for this caller, so there is nothing to cancel. "
+                                             "Tell them, and offer to book one."}
+    res = await ghl.cancel_appointment(old["appointmentId"], old.get("calendarId") or cfg["calendarId"])
+    if not res.get("id"):
+        bg(_after_booking(lead, cfg, "CANCELLATION REQUESTED (could not be done automatically)",
+                          f"Appointment: {old.get('when', '-')}\nReason: {res.get('error')}\nPlease cancel it in the calendar.", False))
+        return {"status": "error", "message": "I could not cancel it in the calendar. Apologise and say the request has been "
+                                              "passed to the team, who will cancel it."}
+    for l in LEADS.values():                                  # the same appointment may be remembered for an earlier visit
+        if (l.get("booking") or {}).get("appointmentId") == old["appointmentId"]:
+            l["booking"] = {**l["booking"], "cancelled": True}
+    lead["booking"] = {**old, "cancelled": True}
+    save_state()
+    bg(_after_booking(lead, cfg, "APPOINTMENT CANCELLED", f"Cancelled appointment: {old.get('when', '-')}", False))
+    return {"status": "cancelled", "when": old.get("when", ""),
+            "message": f"Cancelled. The appointment on {old.get('when', 'that day')} has been cancelled. Tell them, and offer to book another time."}
+
+
 @app.get("/api/booking")
 def booking_status(ref: str = ""):
-    """Lets the page show "appointment booked" as soon as the agent has booked it during the call."""
+    """Lets the page show "booked / changed / cancelled" as soon as the agent has done it during the call."""
     lead = LEADS.get(re.sub(r"[^A-Z0-9]", "", ref.upper()))
-    b = (lead or {}).get("booking")
-    return {"booked": bool(b), "when": (b or {}).get("when", ""), "timezone": (lead or {}).get("tz", "")}
+    b = (lead or {}).get("booking") or {}
+    return {"booked": bool(b) and not b.get("cancelled"), "cancelled": bool(b.get("cancelled")),
+            "when": b.get("when", ""), "timezone": (lead or {}).get("tz", "")}
+
+
+# ---------------------------------------------------------------- booking check (what works, what GHL refused)
+SCOPE_FOR = {"agent": "voice-ai-agents.readonly", "actions": "voice-ai-agent-goals.write", "calendar": "calendars.readonly",
+             "appointments": "calendars/events.write", "pipelines": "opportunities.readonly",
+             "opportunities": "opportunities.write", "contact-appointments": "contacts.readonly"}
+_check_cache: dict = {"ts": 0.0, "v": None}
+
+
+def _ghl_problem(area: str) -> str:
+    e = ghl.ERRORS.get(area)
+    if not e:
+        return ""
+    hint = (f" -> add the scope {SCOPE_FOR[area]} to the token (GHL > Settings > Private Integrations)"
+            if e["status"] in (401, 403) and area in SCOPE_FOR else "")
+    return f"GHL answered {e['message']}{hint}"
+
+
+async def booking_check(base: str) -> dict:
+    steps: list[dict] = []
+
+    def step(name: str, ok, detail: str = ""):
+        steps.append({"name": name, "ok": ok, "detail": detail})
+
+    step("GHL token, location and agent are set in .env", ghl.configured(),
+         "" if ghl.configured() else "Fill GHL_API_KEY, GHL_LOCATION_ID and GHL_AGENT_ID in .env and restart.")
+    step("Booking is switched on", booking_enabled() or not ghl.configured(), "" if booking_enabled() else "BOOKING_ENABLED=0 in .env")
+    step("Public https address GHL can call", bool(base), base or "This address is not public https. Set PUBLIC_URL in .env.")
+    if not (booking_enabled() and base):
+        return {"ok": False, "steps": steps, "calls": []}
+
+    mode = await ensure_booking_actions(base, force=True)
+    on_agent = await ghl.agent_actions()
+    step("The server can read the voice agent", on_agent is not None,
+         _ghl_problem("agent") or f"{len(on_agent or [])} action(s) on the agent")
+    names = {x.get("name") for x in on_agent or []}
+    missing = [n for n in ACTION_NAMES.values() if n not in names]
+    step("Book / change / cancel actions are on the agent", bool(mode) and (on_agent is None or not missing),
+         _ghl_problem("actions") or STATE.get("actions", {}).get("error")
+         or ("Missing: " + ", ".join(missing) if missing else
+             "The agent hears the result of each action." if mode == "reply" else
+             "GHL accepted send-only actions: the agent sends the request but does not hear the result."))
+
+    _bcfg["ts"] = 0.0
+    cfg = await booking_config()
+    step("A calendar was found", bool(cfg["calendarId"]),
+         cfg["calendarName"] or cfg["calendarId"] or _ghl_problem("calendar") or "No active calendar in this GHL account. Create one in Calendars.")
+    if cfg["calendarId"]:
+        tz = get_tz("")
+        by_day = await open_slots(cfg["calendarId"], tz, datetime.now(tz), 7)
+        n = sum(len(v) for v in (by_day or {}).values())
+        step("The calendar has free times in the next 7 days", bool(n),
+             f"{n} free times ({tz_name(tz)})" if n else _ghl_problem("calendar") or
+             "No free times. Check the calendar's availability hours and that a team member is assigned.")
+    step("A pipeline was found for opportunities", bool(cfg["pipelineId"]),
+         (f"{cfg['pipelineName']} / stage: {cfg['stageName'] or '-'}" if cfg["pipelineId"] else
+          _ghl_problem("pipelines") or "No pipeline in this GHL account. Create one in Opportunities > Pipelines."))
+    for area, label in (("appointments", "Creating / changing / cancelling appointments"), ("opportunities", "Creating opportunities"),
+                        ("contact-appointments", "Finding an appointment from an earlier visit (optional)")):
+        if ghl.ERRORS.get(area):
+            step(label, False, _ghl_problem(area))
+
+    day_ago = time.time() - 86400
+    agent_calls = [e for e in EVENTS if e["source"] == "agent" and e["ts"] > day_ago]
+    step("The voice agent has called this server in the last 24 hours", bool(agent_calls) or None,
+         f"{len(agent_calls)} call(s); last: {agent_calls[-1]['kind']} -> {agent_calls[-1]['status']}" if agent_calls else
+         "Not yet. Make a test call and ask to book an appointment. If this stays empty, the agent is not using its "
+         "actions: check that the chat widget uses this agent and that the four actions are switched on in GHL.")
+    calls = [{"time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(e["ts"])), "what": e["kind"], "from": e["source"],
+              "result": e["status"], "detail": e["detail"]} for e in reversed(EVENTS[-25:])]
+    return {"ok": all(x["ok"] is not False for x in steps), "steps": steps, "calls": calls}
+
+
+@app.get("/api/booking/check")
+async def booking_check_page(request: Request, loc: str = "", format: str = ""):
+    """Open /api/booking/check?loc=<your GHL location id> to see why booking does or does not work."""
+    from html import escape
+    if not loc or loc != os.getenv("GHL_LOCATION_ID", ""):
+        raise HTTPException(404, "Not found")
+    if not _check_cache["v"] or time.time() - _check_cache["ts"] > 20:
+        _check_cache.update(v=await booking_check(public_base(request)), ts=time.time())
+    r = _check_cache["v"]
+    if format == "json":
+        return r
+    mark = {True: ("&#10003;", "#16A34A"), False: ("&#10007;", "#DC2626"), None: ("?", "#D97706")}
+    rows = "".join(f'<li><b style="color:{mark[x["ok"]][1]}">{mark[x["ok"]][0]}</b> <span>{escape(x["name"])}'
+                   f'<small>{escape(x["detail"])}</small></span></li>' for x in r["steps"])
+    calls = "".join(f'<tr><td>{escape(c["time"])}</td><td>{escape(c["from"])}</td><td>{escape(c["what"])}</td>'
+                    f'<td>{escape(c["result"])}</td><td>{escape(c["detail"])}</td></tr>' for c in r["calls"])
+    return HTMLResponse(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Booking check</title><style>body{{font:15px/1.5 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#0F172A}}
+ul{{list-style:none;padding:0}}li{{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #E2E8F0}}li b{{font-size:18px;width:20px}}
+small{{display:block;color:#64748B}}table{{border-collapse:collapse;width:100%;font-size:13px}}td,th{{text-align:left;padding:6px 8px;border-bottom:1px solid #E2E8F0;vertical-align:top}}
+h1{{font-size:22px}}h2{{font-size:17px;margin-top:28px}}</style>
+<h1>Appointment booking check: {'everything needed is in place' if r['ok'] else 'something needs fixing'}</h1>
+<ul>{rows}</ul><h2>Recent booking requests (newest first)</h2>
+<table><tr><th>Time</th><th>From</th><th>What</th><th>Result</th><th>Detail</th></tr>{calls or '<tr><td colspan=5>None yet</td></tr>'}</table>""",
+                        headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

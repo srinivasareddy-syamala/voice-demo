@@ -1,5 +1,6 @@
 """GoHighLevel (LeadConnector) API v2 client: Voice AI agent + its actions, contacts, calendar, opportunities."""
 import os
+import time
 
 import httpx
 
@@ -88,6 +89,17 @@ async def add_note(contact_id: str, text: str) -> bool:
 
 # ---------------------------------------------------------------- appointments + opportunities
 CAL_VERSION = "2021-04-15"
+# Last failure per kind of request (cleared when that kind works again). Shown on the booking check page.
+ERRORS: dict[str, dict] = {}
+AREAS = (("/voice-ai/actions", "actions"), ("/voice-ai/agents", "agent"), ("/calendars/events", "appointments"),
+         ("/calendars", "calendar"), ("/opportunities/pipelines", "pipelines"), ("/opportunities", "opportunities"),
+         ("/contacts", "contacts"))
+
+
+def _area(path: str) -> str:
+    if path.startswith("/contacts") and path.endswith("/appointments"):
+        return "contact-appointments"
+    return next((name for prefix, name in AREAS if path.startswith(prefix)), "other")
 
 
 async def _call(method: str, path: str, version: str = "2021-07-28", **kw) -> tuple[int, dict]:
@@ -99,11 +111,16 @@ async def _call(method: str, path: str, version: str = "2021-07-28", **kw) -> tu
             j = r.json()
         except ValueError:
             j = {"message": r.text[:300]}
+        j = j if isinstance(j, dict) else {"data": j}
         if r.status_code >= 400:
             print(f"[ghl] {method} {path} -> {r.status_code}: {str(j)[:300]}")
-        return r.status_code, j if isinstance(j, dict) else {"data": j}
+            ERRORS[_area(path)] = {"status": r.status_code, "message": _err(r.status_code, j), "ts": time.time()}
+        else:
+            ERRORS.pop(_area(path), None)
+        return r.status_code, j
     except httpx.HTTPError as e:
         print(f"[ghl] {method} {path} error: {e}")
+        ERRORS[_area(path)] = {"status": 0, "message": f"could not reach GHL: {e}", "ts": time.time()}
         return 0, {"message": str(e)}
 
 
@@ -151,6 +168,19 @@ async def move_appointment(event_id: str, calendar_id: str, start_iso: str, end_
     return {"id": event_id} if s == 200 else {"error": _err(s, j), "status": s}
 
 
+async def cancel_appointment(event_id: str, calendar_id: str) -> dict:
+    """PUT /calendars/events/appointments/{id} with status cancelled - it stays visible in GHL as cancelled."""
+    s, j = await _call("PUT", f"/calendars/events/appointments/{event_id}", CAL_VERSION,
+                       json={"calendarId": calendar_id, "appointmentStatus": "cancelled", "toNotify": True})
+    return {"id": event_id} if s == 200 else {"error": _err(s, j), "status": s}
+
+
+async def contact_appointments(contact_id: str) -> list[dict]:
+    """GET /contacts/{id}/appointments (scope: contacts.readonly) - finds an appointment booked in an earlier visit."""
+    s, j = await _call("GET", f"/contacts/{contact_id}/appointments")
+    return j.get("events") or [] if s == 200 else []
+
+
 async def list_pipelines() -> list[dict]:
     """GET /opportunities/pipelines (scope: opportunities.readonly)"""
     s, j = await _call("GET", "/opportunities/pipelines", params={"locationId": os.environ["GHL_LOCATION_ID"]})
@@ -192,7 +222,8 @@ async def agent_actions() -> list[dict] | None:
     if s != 200:
         return None
     return [{"id": a.get("id") or a.get("_id"), "name": a.get("name"), "type": a.get("actionType"),
-             "url": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("url")}
+             "url": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("url"),
+             "method": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("method")}
             for a in (j.get("actions") or []) if isinstance(a, dict)]
 
 
@@ -202,13 +233,18 @@ async def save_custom_action(name: str, params: dict, action_id: str = "") -> di
     body = {"agentId": os.environ["GHL_AGENT_ID"], "locationId": os.environ["GHL_LOCATION_ID"],
             "actionType": "CUSTOM_ACTION", "name": name, "actionParameters": params}
     method, path = ("PUT", f"/voice-ai/actions/{action_id}") if action_id else ("POST", "/voice-ai/actions")
-    s, j = await _call(method, path, _voice_version(), json=body)
+    ver = _voice_version()
+    s, j = await _call(method, path, ver, json=body)
+    if s in (400, 422) and "version" in str(j).lower() and ver != CAL_VERSION:
+        ver = CAL_VERSION
+        s, j = await _call(method, path, ver, json=body)
     if s == 404 and action_id:              # it was deleted in GHL -> make it again
-        s, j = await _call("POST", "/voice-ai/actions", _voice_version(), json=body)
+        method, path = "POST", "/voice-ai/actions"
+        s, j = await _call(method, path, ver, json=body)
     if s >= 400 and "selectedPaths" in str(j):   # older field name used in GHL's own examples
         p2 = dict(params)
         p2["responsePathsToExtract"] = p2.pop("selectedPaths", [])
-        s, j = await _call(method, path, _voice_version(), json={**body, "actionParameters": p2})
+        s, j = await _call(method, path, ver, json={**body, "actionParameters": p2})
     if s in (200, 201):
         return {"id": j.get("id") or j.get("_id") or (j.get("action") or {}).get("id") or action_id}
     return {"error": _err(s, j), "status": s}

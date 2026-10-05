@@ -47,28 +47,35 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 Deploy behind **HTTPS** (Render / Railway / VPS + Nginx). Phones only allow the microphone on HTTPS.
 Without GHL keys it runs in demo mode: scraping and the company view work, but the agent isn't updated.
 
-## Appointment booking (calendar + opportunity)
+## Appointments: book, change, cancel (calendar + opportunity)
 During the demo call the agent asks **"Would you like to book an appointment with the Pragna AI team?"** as soon
-as the visitor sounds interested. If they say yes it offers free times and books one. The same thing is available
-as a **Book an appointment** button next to the phone.
+as the visitor sounds interested. It can then **book**, **change the time** and **cancel**. The same is available
+from the **Book an appointment / Change time** button next to the phone, and the page follows what the agent does.
 
-What gets created in GHL:
-- an **appointment** in the calendar (linked to the contact saved from the form),
-- an **opportunity** in the pipeline (`<Company> - AI voice agent demo (<Name>)`, status open),
-- a **note** on the contact with the time, calendar and pipeline stage.
+What happens in GHL:
+- **Book**: an appointment in the calendar (linked to the contact from the form), an opportunity in the pipeline
+  (`<Company> - AI voice agent demo (<Name>)`, status open) and a note on the contact.
+- **Change**: the same appointment is moved to the new time; note "APPOINTMENT CHANGED".
+- **Cancel**: the appointment is marked cancelled (it stays visible in the calendar); note "APPOINTMENT CANCELLED".
+  The opportunity is left open so the team can follow up.
+- A returning visitor (same email/phone) can change or cancel the appointment made in an earlier visit.
 
-How it works: on the first form submission the server adds two *custom actions* to the Voice AI agent
-(`Check appointment times`, `Book appointment`; see AI Agents → Voice AI → agent → Actions). They call
-`/api/ghl/slots` and `/api/ghl/book` on this server, so the server must be on a public **https** address
-(`PUBLIC_URL` in `.env`, or simply the address the page is opened on). On `localhost` only the button works.
+How it works: the server adds four *custom actions* to the Voice AI agent (AI Agents → Voice AI → agent → Actions):
+`Check appointment times`, `Book appointment`, `Change appointment time`, `Cancel appointment`. They call
+`/api/ghl/slots`, `/api/ghl/book`, `/api/ghl/change`, `/api/ghl/cancel` on this server, so it must be on a public
+**https** address (`PUBLIC_URL` in `.env`, or the address the page is opened on). On `localhost` only the button works.
+
+**Check page** — open `https://<your address>/api/booking/check?loc=<GHL_LOCATION_ID>`. It shows a tick or cross
+for every requirement (token permissions, actions on the agent, calendar, free times, pipeline) with GHL's own
+error text, and a list of the latest booking requests the agent or the page made and their results.
 
 Setup:
 1. Add these scopes to the Private Integration token: `voice-ai-agent-goals.write`, `calendars.readonly`,
-   `calendars/events.write`, `opportunities.readonly`, `opportunities.write`.
-2. Have at least one active **calendar** (with availability) and one **pipeline** in the sub-account.
+   `calendars/events.write`, `opportunities.readonly`, `opportunities.write`, `contacts.readonly`.
+2. Have at least one active **calendar** (with availability and a team member) and one **pipeline**.
    The app picks the first active calendar / first pipeline, preferring names with "demo" and a stage with
    "appointment" or "booked". To choose exactly, set `GHL_CALENDAR_ID`, `GHL_PIPELINE_ID`, `GHL_PIPELINE_STAGE_ID`.
-3. Restart. The log prints `[booking] calendar: … | pipeline: … / stage: …` and any missing permission.
+3. Restart, submit the form once, then open the check page.
 
 ## Talk button behaviour
 1. Asks for microphone permission inside the tap (needed on iPhone Safari / Chrome mobile).

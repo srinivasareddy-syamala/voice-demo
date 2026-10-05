@@ -257,6 +257,8 @@
   .times button{padding:10px 6px;border-radius:10px;border:1px solid var(--line);background:#F8FAFC;color:var(--navy);font:600 13.5px "Plus Jakarta Sans",sans-serif;cursor:pointer}
   .times button:hover{border-color:#2563EB;background:#EFF6FF} .times button:disabled{opacity:.5;cursor:wait}
   .modal .msg{margin-top:12px;font-size:13px;font-weight:600;color:var(--err)} .modal .msg:empty{display:none}
+  .modal .cancel{margin-top:14px;padding:0;border:0;background:none;color:var(--err);font:600 13px "Plus Jakarta Sans",sans-serif;cursor:pointer;text-decoration:underline}
+  .booked.off{background:#F1F5F9;color:#475569}
   /* The inside of the phone is rendered 390px wide (a real phone) and scaled down to fit,
      because the GHL chat panel is a fixed 340px wide and would be cut off in a narrower frame. */
   iframe.site{left:0;right:auto;bottom:auto;width:390px;height:calc((100% - 80px) / var(--s,1));
@@ -480,6 +482,7 @@
     <div class="days" id="bookDays"></div>
     <div class="times" id="bookTimes"></div>
     <div class="msg" id="bookMsg"></div>
+    <button type="button" class="cancel hidden" id="bookCancel">Cancel my appointment</button>
   </div>
 </div>
 <div class="warn hidden" id="warn"></div>
@@ -595,7 +598,7 @@ function showCompany(d){
     encodeURIComponent("Hi Pragna AI, I just tried the AI voice agent demo for " + c.company_name + " and would like to know more.");
 
   applyTheme(d.theme);
-  setupBooking(d.bookingRef);
+  setupBooking(d.bookingRef, d.booking);
 
   // phone = their website (thum.io screenshot) with the GHL chat widget at the bottom
   try { sessionStorage.setItem("pv_shot", d.screenshot || ""); } catch (e) {}
@@ -631,25 +634,30 @@ function applyTheme(t){
 }
 
 /* ---------- appointment: the agent books it during the call; this button does the same by hand ---------- */
-let BOOK_REF = "", bookPoll = null;
-function showBooked(when){
-  txt($("bookedLine"), "✓ Appointment booked: " + when + ". The Pragna AI team will speak to you then.");
-  $("bookedLine").classList.remove("hidden");
-  txt($("bookBtn").lastChild, " Change time");
+let BOOK_REF = "", bookPoll = null, HAS_BOOKING = false;
+function showBooking(b){                                  // b = {booked, cancelled, when}
+  HAS_BOOKING = !!(b && b.booked);
+  const line = $("bookedLine");
+  line.classList.toggle("hidden", !(b && (b.booked || b.cancelled)));
+  line.classList.toggle("off", !!(b && b.cancelled));
+  if (b && b.booked) txt(line, "✓ Appointment booked: " + b.when + ". The Pragna AI team will speak to you then.");
+  else if (b && b.cancelled) txt(line, "Your appointment on " + b.when + " has been cancelled.");
+  txt($("bookBtn").lastChild, HAS_BOOKING ? " Change time" : " Book an appointment");
 }
-function setupBooking(ref){
+function setupBooking(ref, now){
   BOOK_REF = ref || "";
   $("bookBtn").classList.toggle("hidden", !BOOK_REF);
-  $("bookedLine").classList.add("hidden");
+  showBooking(now);
   clearInterval(bookPoll);
   if (!BOOK_REF) return;
-  let last = "", tries = 0;                              // show it as soon as the agent has booked in the call
+  let last = JSON.stringify(now || {}), tries = 0;        // follow what the agent does during the call
   bookPoll = setInterval(async () => {
     if (++tries > 180) return clearInterval(bookPoll);   // 30 minutes
     if (document.hidden) return;
     try {
       const b = await (await fetch(API + "/api/booking?ref=" + encodeURIComponent(BOOK_REF))).json();
-      if (b.booked && b.when !== last) { last = b.when; showBooked(b.when); }
+      const sig = JSON.stringify(b);
+      if (sig !== last) { last = sig; showBooking(b); }
     } catch (e) {}
   }, 10000);
 }
@@ -660,9 +668,11 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") closeBook();
 $("bookBtn").addEventListener("click", async () => {
   $("bookModal").classList.remove("hidden");
   $("bookDays").innerHTML = ""; $("bookTimes").innerHTML = ""; txt($("bookMsg"), "");
+  txt($("bookTitle"), HAS_BOOKING ? "Change your appointment" : "Book an appointment");
+  $("bookCancel").classList.toggle("hidden", !HAS_BOOKING);
   txt($("bookSub"), "Looking for free times…");
   try {
-    const r = await fetch(API + "/api/ghl/slots?ref=" + encodeURIComponent(BOOK_REF));
+    const r = await fetch(API + "/api/ghl/slots?src=page&ref=" + encodeURIComponent(BOOK_REF));
     const d = await r.json();
     if (!r.ok || d.status !== "ok" || !(d.days || []).length) {
       txt($("bookSub"), "We couldn't show free times just now. Message us on WhatsApp and we'll arrange a time with you.");
@@ -692,15 +702,26 @@ async function bookSlot(day, t){
   const btns = [...$("bookTimes").children]; btns.forEach(b => b.disabled = true);
   txt($("bookMsg"), "");
   try {
-    const r = await fetch(API + "/api/ghl/book?ref=" + encodeURIComponent(BOOK_REF) + "&date=" + day.date + "&time=" + encodeURIComponent(t.time),
-                          {method: "POST"});
+    const r = await fetch(API + "/api/ghl/" + (HAS_BOOKING ? "change" : "book") + "?src=page&ref=" + encodeURIComponent(BOOK_REF) +
+                          "&date=" + day.date + "&time=" + encodeURIComponent(t.time), {method: "POST"});
     const d = await r.json();
-    if (r.ok && d.status === "booked") { showBooked(d.when); closeBook(); return; }
+    if (r.ok && (d.status === "booked" || d.status === "rescheduled")) { showBooking({booked: true, when: d.when}); closeBook(); return; }
     txt($("bookMsg"), d.status === "unavailable" ? "That time has just been taken. Please pick another one."
                                                  : "We couldn't book that just now. Please try another time or message us on WhatsApp.");
   } catch (e) { txt($("bookMsg"), "We couldn't reach the server. Please try again."); }
   btns.forEach(b => b.disabled = false);
 }
+
+$("bookCancel").addEventListener("click", async () => {
+  $("bookCancel").disabled = true; txt($("bookMsg"), "");
+  try {
+    const r = await fetch(API + "/api/ghl/cancel?src=page&ref=" + encodeURIComponent(BOOK_REF), {method: "POST"});
+    const d = await r.json();
+    if (r.ok && (d.status === "cancelled" || d.status === "none")) { showBooking({cancelled: d.status === "cancelled", when: d.when || ""}); closeBook(); }
+    else txt($("bookMsg"), "We couldn't cancel it just now. Please message us on WhatsApp.");
+  } catch (e) { txt($("bookMsg"), "We couldn't reach the server. Please try again."); }
+  $("bookCancel").disabled = false;
+});
 
 /* ---------- voice call status, reported by the widget inside the phone ---------- */
 function setStatus(kind, msg){

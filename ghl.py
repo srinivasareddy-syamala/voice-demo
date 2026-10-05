@@ -223,7 +223,8 @@ async def agent_actions() -> list[dict] | None:
         return None
     return [{"id": a.get("id") or a.get("_id"), "name": a.get("name"), "type": a.get("actionType"),
              "url": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("url"),
-             "method": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("method")}
+             "method": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("method"),
+             "say": (a.get("actionParameters") or {}).get("triggerMessage")}
             for a in (j.get("actions") or []) if isinstance(a, dict)]
 
 
@@ -241,6 +242,12 @@ async def save_custom_action(name: str, params: dict, action_id: str = "") -> di
     if s == 404 and action_id:              # it was deleted in GHL -> make it again
         method, path = "POST", "/voice-ai/actions"
         s, j = await _call(method, path, ver, json=body)
+    if s == 400 and action_id and "same name" in str(j).lower():      # GHL refuses to update in place: replace it
+        d, _ = await _call("DELETE", f"/voice-ai/actions/{action_id}", ver,
+                           params={"locationId": os.environ["GHL_LOCATION_ID"], "agentId": os.environ["GHL_AGENT_ID"]})
+        if d in (200, 204):
+            method, path = "POST", "/voice-ai/actions"
+            s, j = await _call(method, path, ver, json=body)
     if s >= 400 and "selectedPaths" in str(j):   # older field name used in GHL's own examples
         p2 = dict(params)
         p2["responsePathsToExtract"] = p2.pop("selectedPaths", [])

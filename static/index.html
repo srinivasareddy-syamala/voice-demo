@@ -642,6 +642,10 @@ function showBooking(b){                                  // b = {booked, cancel
   line.classList.toggle("off", !!(b && b.cancelled));
   if (b && b.booked) txt(line, "✓ Appointment booked: " + b.when + ". The Pragna AI team will speak to you then.");
   else if (b && b.cancelled) txt(line, "Your appointment on " + b.when + " has been cancelled.");
+  else if (b && b.tried) {                               // the agent was asked for a time that is not free
+    txt(line, b.tried + " isn't available, so nothing is booked yet. Tap “Book an appointment” to choose a free time.");
+    line.classList.remove("hidden"); line.classList.add("off");
+  }
   txt($("bookBtn").lastChild, HAS_BOOKING ? " Change time" : " Book an appointment");
 }
 function setupBooking(ref, now){

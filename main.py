@@ -315,8 +315,8 @@ async def train(req: TrainRequest, request: Request):
     visitor = req.model_dump()
     # make sure the voice agent has its booking actions (first run creates them in GHL)
     actions_task = asyncio.create_task(ensure_booking_actions(public_base(request)))
-    if booking_enabled():
-        bg(booking_config())                      # look up calendar + pipeline now, so the first booking is quick
+    # free appointment times go into the agent's instructions, so it only offers times that can really be booked
+    times_task = asyncio.create_task(prompt_times(get_tz(req.tz)) if booking_enabled() else asyncio.sleep(0, []))
     consent_line = "Consent to use public website content for the demo: YES (" + \
                    time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")"
 
@@ -355,7 +355,8 @@ async def train(req: TrainRequest, request: Request):
     had = await current_booking(lead) if can_book and lead["contactId"] else None   # booked in an earlier visit?
     prompt = build_agent_prompt(data, visitor, {
         "ref": lead["ref"], "tz": lead["tz"], "now": datetime.now(get_tz(lead["tz"])),
-        "replies": can_book == "reply", "existing": (had or {}).get("when", "")} if can_book else None)
+        "replies": can_book == "reply", "existing": (had or {}).get("when", ""),
+        "times": await times_task} if can_book else None)
     welcome = build_welcome(data, visitor)
 
     # run in parallel: train GHL agent, save contact, take mobile screenshot of the site
@@ -508,11 +509,11 @@ ACTION_TEXT = {   # kind: (when the agent should use it, what it says meanwhile)
     "slots": ("When the caller would like to book or change an appointment and you need to know which days and times "
               "are free, or the caller asks what times are available.", "Let me check the calendar for you."),
     "book": ("When the caller has agreed to book an appointment and has chosen a specific day and time.",
-             "One moment, I'm booking that for you."),
+             "One moment while I check that time."),
     "change": ("When the caller already has an appointment and wants to move it to a different day or time, "
-               "and has told you the new day and time.", "One moment, I'm changing that for you."),
+               "and has told you the new day and time.", "One moment while I check the new time."),
     "cancel": ("When the caller has confirmed that they want to cancel their appointment.",
-               "One moment, I'm cancelling that for you."),
+               "One moment please."),
 }
 
 
@@ -551,7 +552,7 @@ async def ensure_booking_actions(base: str, force: bool = False) -> str:
             url = f"{base}/api/ghl/{kind}"
             found = next((x for x in existing or [] if x.get("name") == name), None)
             aid = (found or {}).get("id") or ("" if existing is not None else st.get(kind, ""))
-            if found and found.get("url") == url:
+            if found and found.get("url") == url and found.get("say") in (None, ACTION_TEXT[kind][1]):
                 st[kind], methods[kind] = aid, (found.get("method") or "GET").upper()
                 continue
             res = await ghl.save_custom_action(name, _action_params(kind, base, "GET"), aid)
@@ -562,6 +563,9 @@ async def ensure_booking_actions(base: str, force: bool = False) -> str:
             if res.get("id"):
                 st[kind], methods[kind] = res["id"], method
                 print(f"[booking] agent action '{name}' ready ({method}) -> {url}")
+            elif found and found.get("url") == url and aid:      # only its wording could not be refreshed: it still works
+                st[kind], methods[kind] = aid, (found.get("method") or "GET").upper()
+                print(f"[booking] kept the existing '{name}' action (GHL refused the update: {res.get('error')})")
             else:
                 st.pop(kind, None)
                 errors.append(f"{name}: {res.get('error')}")
@@ -572,6 +576,8 @@ async def ensure_booking_actions(base: str, force: bool = False) -> str:
         st.pop("failed", None) if ok else st.pop("checked", None)
         st.update({"base": base, "checked": now, "mode": mode, "error": ""} if ok
                   else {"failed": now, "error": "; ".join(errors)[:500]})
+        if ok:
+            ghl.ERRORS.pop("actions", None)
         save_state()
         return mode if ok else ""
 
@@ -714,6 +720,32 @@ async def open_slots(calendar_id: str, tz, start: datetime, days: int) -> dict[d
             if begin <= dt < end:
                 out.setdefault(dt.date(), []).append(dt)
     return {d: sorted(set(v)) for d, v in sorted(out.items())}
+
+
+def _slot_lines(by_day: dict, max_days: int = 7) -> list[str]:
+    """Free times as compact lines for the agent's instructions: 'Tue 6 Oct (2026-10-06): 12:30 pm to 3 pm, 4 pm'."""
+    gaps = [int((b - a).total_seconds() // 60) for ts in by_day.values() for a, b in zip(ts, ts[1:])]
+    step = min([g for g in gaps if g > 0], default=30)
+    lines = []
+    for d, ts in list(by_day.items())[:max_days]:
+        runs, start, prev = [], ts[0], ts[0]
+        for t in ts[1:] + [None]:
+            if t is None or (t - prev).total_seconds() // 60 != step:
+                runs.append(fmt_time(start) if start == prev else f"{fmt_time(start)} to {fmt_time(prev)}")
+                start = t
+            prev = t
+        lines.append(f"{d:%a} {d.day} {d:%b} ({d.isoformat()}): {', '.join(runs)}")
+    if lines and step:
+        lines.append(f"(Within a range, appointments start every {step} minutes. The last time in a range is the last start time.)")
+    return lines
+
+
+async def prompt_times(tz) -> list[str]:
+    """The free times of the next week, read once when the visitor submits the form."""
+    cfg = await booking_config()
+    if not cfg["calendarId"]:
+        return []
+    return _slot_lines(await open_slots(cfg["calendarId"], tz, datetime.now(tz), 8) or {})
 
 
 def _speak_slots(by_day: dict, max_days: int = 3, per_day: int = 3) -> str:
@@ -963,10 +995,13 @@ async def book_for(lead: dict, date_s: str, time_s: str, source: str = "agent") 
             else:
                 later = await open_slots(cfg["calendarId"], tz, start, 8) or {}
                 alts = f"Other free times: {_speak_slots(later)}" if later else "There are no other free times this week"
-            if one_way:
-                bg(_after_booking(lead, cfg, "APPOINTMENT REQUESTED (that time is not free)",
-                                  f"Requested time: {when} ({tz_name(tz)})\n{alts}.\nPlease contact them to agree a time."))
-            return {"status": "unavailable", "message": f"{when} is not available. {alts}. Ask which one they would like."}
+            lead["tried"] = when
+            if source == "agent":       # they said yes to an appointment: keep the lead visible even if no time is agreed
+                bg(_after_booking(lead, cfg, "APPOINTMENT REQUESTED - NOT BOOKED (that time is not free)",
+                                  f"Requested time: {when} ({tz_name(tz)})\n{alts}.\n"
+                                  "If no booked appointment follows this note, please contact them to agree a time."))
+            return {"status": "unavailable",
+                    "message": f"NOT booked. {when} is not available. {alts}. Tell them it is not available and ask which one they would like."}
         end = (start + timedelta(minutes=cfg["slotMins"])).isoformat()
         title = f"{brand} demo call - {company} ({name})"
         desc = (f"Booked from the {brand} voice agent demo.\nName: {name}\nCompany: {company}\n"
@@ -991,6 +1026,7 @@ async def book_for(lead: dict, date_s: str, time_s: str, source: str = "agent") 
                                               f"passed to the {brand} team, who will contact them to confirm."}
     lead["booking"] = {"start": start.isoformat(), "when": when, "appointmentId": appt["id"], "calendarId": cfg["calendarId"],
                        "opportunityId": old.get("opportunityId", "")}
+    lead.pop("tried", None)
     save_state()
     cal = cfg["calendarName"] or cfg["calendarId"]
     if moved:
@@ -1031,7 +1067,8 @@ def booking_status(ref: str = ""):
     lead = LEADS.get(re.sub(r"[^A-Z0-9]", "", ref.upper()))
     b = (lead or {}).get("booking") or {}
     return {"booked": bool(b) and not b.get("cancelled"), "cancelled": bool(b.get("cancelled")),
-            "when": b.get("when", ""), "timezone": (lead or {}).get("tz", "")}
+            "when": b.get("when", ""), "timezone": (lead or {}).get("tz", ""),
+            "tried": "" if b and not b.get("cancelled") else (lead or {}).get("tried", "")}
 
 
 # ---------------------------------------------------------------- booking check (what works, what GHL refused)
@@ -1070,7 +1107,7 @@ async def booking_check(base: str) -> dict:
     names = {x.get("name") for x in on_agent or []}
     missing = [n for n in ACTION_NAMES.values() if n not in names]
     step("Book / change / cancel actions are on the agent", bool(mode) and (on_agent is None or not missing),
-         _ghl_problem("actions") or STATE.get("actions", {}).get("error")
+         ((_ghl_problem("actions") or STATE.get("actions", {}).get("error")) if not mode else "")
          or ("Missing: " + ", ".join(missing) if missing else
              "The agent hears the result of each action." if mode == "reply" else
              "GHL accepted send-only actions: the agent sends the request but does not hear the result."))

@@ -1,4 +1,4 @@
-# eApps Global — Free AI Voice Agent Preview (GoHighLevel)
+# Pragna AI — Free AI Voice Agent Preview (GoHighLevel)
 
 Landing → **Try it free** → form → scrape company website → fill the GHL Voice AI agent's prompt
 and first message → mobile company view → **Talk with Agent** → microphone on → GHL voice widget
@@ -26,7 +26,7 @@ greeting (real names filled in) into the agent via the API. Nothing needs merge 
    the page loads it **after** the agent has been trained, so the first call already has the new prompt.
 2. Make sure that widget is linked to the agent whose ID you put in `GHL_AGENT_ID`
    (AI Agents → Voice AI → open agent → ID in the URL).
-3. Settings → Private Integrations → create token (free) with `voice-ai-agents.write`, `contacts.write`
+3. Settings → Private Integrations → create token (free) with `voice-ai-agents.write`, `voice-ai-agents.readonly`, `contacts.write`
    → `GHL_API_KEY`. Location ID → `GHL_LOCATION_ID`.
 4. Optional: the agent's phone number → `GHL_AGENT_PHONE` (tel: fallback if the widget can't load).
 
@@ -46,6 +46,29 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 Deploy behind **HTTPS** (Render / Railway / VPS + Nginx). Phones only allow the microphone on HTTPS.
 Without GHL keys it runs in demo mode: scraping and the company view work, but the agent isn't updated.
+
+## Appointment booking (calendar + opportunity)
+During the demo call the agent asks **"Would you like to book an appointment with the Pragna AI team?"** as soon
+as the visitor sounds interested. If they say yes it offers free times and books one. The same thing is available
+as a **Book an appointment** button next to the phone.
+
+What gets created in GHL:
+- an **appointment** in the calendar (linked to the contact saved from the form),
+- an **opportunity** in the pipeline (`<Company> - AI voice agent demo (<Name>)`, status open),
+- a **note** on the contact with the time, calendar and pipeline stage.
+
+How it works: on the first form submission the server adds two *custom actions* to the Voice AI agent
+(`Check appointment times`, `Book appointment`; see AI Agents → Voice AI → agent → Actions). They call
+`/api/ghl/slots` and `/api/ghl/book` on this server, so the server must be on a public **https** address
+(`PUBLIC_URL` in `.env`, or simply the address the page is opened on). On `localhost` only the button works.
+
+Setup:
+1. Add these scopes to the Private Integration token: `voice-ai-agent-goals.write`, `calendars.readonly`,
+   `calendars/events.write`, `opportunities.readonly`, `opportunities.write`.
+2. Have at least one active **calendar** (with availability) and one **pipeline** in the sub-account.
+   The app picks the first active calendar / first pipeline, preferring names with "demo" and a stage with
+   "appointment" or "booked". To choose exactly, set `GHL_CALENDAR_ID`, `GHL_PIPELINE_ID`, `GHL_PIPELINE_STAGE_ID`.
+3. Restart. The log prints `[booking] calendar: … | pipeline: … / stage: …` and any missing permission.
 
 ## Talk button behaviour
 1. Asks for microphone permission inside the tap (needed on iPhone Safari / Chrome mobile).

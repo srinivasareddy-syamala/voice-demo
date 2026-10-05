@@ -5,3 +5,4 @@ __pycache__/
 cloudflared.exe
 tunnel.log
 .browsers/
+.demo_state.json

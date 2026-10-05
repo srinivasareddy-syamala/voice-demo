@@ -85,11 +85,18 @@ BRAND_NAME=Pragna AI
 WHATSAPP_NUMBER=${WA:-+44 7446 952720}
 THUM_IO_AUTH=
 WIDGET_AUTO_OPEN=1
+BOOKING_ENABLED=1
+GHL_CALENDAR_ID=
+GHL_PIPELINE_ID=
+GHL_PIPELINE_STAGE_ID=
+DEFAULT_TIMEZONE=Europe/London
 EOF
     echo "    Saved. To change later:  sudo nano $APP_DIR/.env   then   sudo systemctl restart voice-demo"
   else
     echo "    Keeping the existing .env"
   fi
+  # address GHL's voice agent calls to book appointments (added once; edit .env to change it)
+  grep -q '^PUBLIC_URL=' .env || echo "PUBLIC_URL=https://$DOMAIN" >> .env
   chmod 600 .env
 
   echo

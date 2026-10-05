@@ -240,6 +240,23 @@
   .info-rest .wa{display:inline-flex;padding:12px 16px;font-size:14px;margin-top:16px;border-radius:12px}
   .info-rest .talk-status{text-align:left;font-size:13px;font-weight:700;min-height:0;margin-bottom:8px}
   .info-rest .talk-status:empty{display:none}
+  /* appointment: button next to WhatsApp, "booked" line, and a small pop-up with the free times */
+  .cta-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px} .info-rest .cta-row .wa{margin-top:0;padding:11px 12px;font-size:13px;gap:6px}
+  .bookbtn{display:inline-flex;align-items:center;gap:6px;padding:11px 12px;border:0;border-radius:12px;background:var(--grad);color:#fff;
+           font:700 13px "Plus Jakarta Sans",sans-serif;cursor:pointer;box-shadow:0 6px 18px #2563eb33}
+  .bookbtn svg{width:18px;height:18px;flex:none}
+  .booked{margin-top:10px;padding:9px 12px;border-radius:12px;background:#DCFCE7;color:#166534;font-size:13.5px;font-weight:700;line-height:1.4}
+  .modal{position:fixed;inset:0;z-index:50;background:#0f172a8c;display:grid;place-items:center;padding:16px}
+  .modal .box{width:min(440px,100%);max-height:min(86svh,620px);overflow:auto;background:#fff;border-radius:20px;padding:20px;box-shadow:0 30px 80px #0f172a55;position:relative}
+  .modal h3{margin:0 28px 4px 0;font-size:19px;color:var(--navy)} .modal p{margin:0 0 12px;font-size:13px;color:var(--muted);line-height:1.5}
+  .modal .x{position:absolute;top:12px;right:12px;width:32px;height:32px;border:0;border-radius:50%;background:#F1F5F9;color:var(--navy);font-size:18px;cursor:pointer;line-height:1}
+  .days{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scrollbar-width:thin}
+  .days button{flex:none;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:#fff;color:var(--navy);font:600 13px "Plus Jakarta Sans",sans-serif;cursor:pointer}
+  .days button.on{background:var(--navy);border-color:var(--navy);color:#fff}
+  .times{display:grid;grid-template-columns:repeat(auto-fill,minmax(86px,1fr));gap:8px;margin-top:12px}
+  .times button{padding:10px 6px;border-radius:10px;border:1px solid var(--line);background:#F8FAFC;color:var(--navy);font:600 13.5px "Plus Jakarta Sans",sans-serif;cursor:pointer}
+  .times button:hover{border-color:#2563EB;background:#EFF6FF} .times button:disabled{opacity:.5;cursor:wait}
+  .modal .msg{margin-top:12px;font-size:13px;font-weight:600;color:var(--err)} .modal .msg:empty{display:none}
   /* The inside of the phone is rendered 390px wide (a real phone) and scaled down to fit,
      because the GHL chat panel is a fixed 340px wide and would be cut off in a narrower frame. */
   iframe.site{left:0;right:auto;bottom:auto;width:390px;height:calc((100% - 80px) / var(--s,1));
@@ -284,7 +301,7 @@
     .info-top,.info-rest{text-align:center;max-width:520px}
     .info-top h2{margin:2px 0 4px;font-size:clamp(19px,5.4vw,26px)} .hint{font-size:13px}
     .info-rest .talk-status{text-align:center} .info-rest .chips{justify-content:center}
-    .info-rest .w-contact{justify-items:center}
+    .info-rest .w-contact{justify-items:center} .cta-row{justify-content:center}
     form.card label{font-size:12.5px;margin-top:8px}
     form.card input,select.cc{padding:11px 12px}
     form.card label.consent{font-size:10.5px;line-height:1.45;margin-top:10px}
@@ -441,12 +458,30 @@
     <p class="w-desc" id="wDesc"></p>
     <div class="chips" id="wServices"></div>
     <div class="w-contact" id="wContact"></div>
-    <a class="wa" id="waLink2" href="#" target="_blank" rel="noopener">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5"/></svg>
-      Get this on my website
-    </a>
+    <div class="cta-row">
+      <button type="button" class="bookbtn hidden" id="bookBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+        Book an appointment
+      </button>
+      <a class="wa" id="waLink2" href="#" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.7-5.2A8.5 8.5 0 1 1 21 11.5Z"/><path d="M9 9.5c0 3 2.5 5.5 5.5 5.5"/></svg>
+        Get this on my website
+      </a>
+    </div>
+    <div class="booked hidden" id="bookedLine"></div>
   </div>
 </section>
+<!-- appointment pop-up: free times from the GHL calendar -->
+<div class="modal hidden" id="bookModal" role="dialog" aria-modal="true" aria-labelledby="bookTitle">
+  <div class="box">
+    <button type="button" class="x" id="bookClose" aria-label="Close">×</button>
+    <h3 id="bookTitle">Book an appointment</h3>
+    <p id="bookSub">Pick a time to speak with the Pragna AI team.</p>
+    <div class="days" id="bookDays"></div>
+    <div class="times" id="bookTimes"></div>
+    <div class="msg" id="bookMsg"></div>
+  </div>
+</div>
 <div class="warn hidden" id="warn"></div>
 
 <footer>© Pragna AI <img src="/static/pragna-icon.png" alt=""></footer>
@@ -512,6 +547,7 @@ $("form").addEventListener("submit", async e => {
   body.phone = national ? body.cc + national : "";
   delete body.cc;
   body.consent = true;
+  try { body.tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { body.tz = ""; }
   SITE = /^https?:\/\//i.test(body.website.trim()) ? body.website.trim() : "https://" + body.website.trim();
   if (!CFG.ownScreenshots) new Image().src = CFG.thumPrefix + SITE;   // no own screenshots on this server: warm up thum.io
   closeSheet(); $("landing").classList.add("hidden"); $("progress").classList.remove("hidden");
@@ -559,6 +595,7 @@ function showCompany(d){
     encodeURIComponent("Hi Pragna AI, I just tried the AI voice agent demo for " + c.company_name + " and would like to know more.");
 
   applyTheme(d.theme);
+  setupBooking(d.bookingRef);
 
   // phone = their website (thum.io screenshot) with the GHL chat widget at the bottom
   try { sessionStorage.setItem("pv_shot", d.screenshot || ""); } catch (e) {}
@@ -591,6 +628,78 @@ function applyTheme(t){
   const w = $("result"), p = t && t.primary;
   if (!p || !/^#[0-9a-f]{6}$/i.test(p)) { w.style.removeProperty("--site"); return; }
   w.style.setProperty("--site", p);
+}
+
+/* ---------- appointment: the agent books it during the call; this button does the same by hand ---------- */
+let BOOK_REF = "", bookPoll = null;
+function showBooked(when){
+  txt($("bookedLine"), "✓ Appointment booked: " + when + ". The Pragna AI team will speak to you then.");
+  $("bookedLine").classList.remove("hidden");
+  txt($("bookBtn").lastChild, " Change time");
+}
+function setupBooking(ref){
+  BOOK_REF = ref || "";
+  $("bookBtn").classList.toggle("hidden", !BOOK_REF);
+  $("bookedLine").classList.add("hidden");
+  clearInterval(bookPoll);
+  if (!BOOK_REF) return;
+  let last = "", tries = 0;                              // show it as soon as the agent has booked in the call
+  bookPoll = setInterval(async () => {
+    if (++tries > 180) return clearInterval(bookPoll);   // 30 minutes
+    if (document.hidden) return;
+    try {
+      const b = await (await fetch(API + "/api/booking?ref=" + encodeURIComponent(BOOK_REF))).json();
+      if (b.booked && b.when !== last) { last = b.when; showBooked(b.when); }
+    } catch (e) {}
+  }, 10000);
+}
+const closeBook = () => $("bookModal").classList.add("hidden");
+$("bookClose").addEventListener("click", closeBook);
+$("bookModal").addEventListener("click", e => { if (e.target === $("bookModal")) closeBook(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeBook(); });
+$("bookBtn").addEventListener("click", async () => {
+  $("bookModal").classList.remove("hidden");
+  $("bookDays").innerHTML = ""; $("bookTimes").innerHTML = ""; txt($("bookMsg"), "");
+  txt($("bookSub"), "Looking for free times…");
+  try {
+    const r = await fetch(API + "/api/ghl/slots?ref=" + encodeURIComponent(BOOK_REF));
+    const d = await r.json();
+    if (!r.ok || d.status !== "ok" || !(d.days || []).length) {
+      txt($("bookSub"), "We couldn't show free times just now. Message us on WhatsApp and we'll arrange a time with you.");
+      return;
+    }
+    txt($("bookSub"), "Pick a time to speak with the Pragna AI team. Times are shown in your time (" + d.timezone.replace(/_/g, " ") + ").");
+    const pickDay = (day, btn) => {
+      [...$("bookDays").children].forEach(b => b.classList.toggle("on", b === btn));
+      $("bookTimes").innerHTML = "";
+      day.times.forEach(t => {
+        const b = txt(document.createElement("button"), t.label); b.type = "button";
+        b.addEventListener("click", () => bookSlot(day, t));
+        $("bookTimes").appendChild(b);
+      });
+    };
+    d.days.forEach((day, i) => {
+      const b = txt(document.createElement("button"), day.label.split(" ").map((w, j) => j === 1 ? w : w.slice(0, 3)).join(" ")); b.type = "button";
+      b.addEventListener("click", () => pickDay(day, b));
+      $("bookDays").appendChild(b);
+      if (i === 0) pickDay(day, b);
+    });
+  } catch (e) {
+    txt($("bookSub"), "We couldn't reach the server. Please try again in a moment.");
+  }
+});
+async function bookSlot(day, t){
+  const btns = [...$("bookTimes").children]; btns.forEach(b => b.disabled = true);
+  txt($("bookMsg"), "");
+  try {
+    const r = await fetch(API + "/api/ghl/book?ref=" + encodeURIComponent(BOOK_REF) + "&date=" + day.date + "&time=" + encodeURIComponent(t.time),
+                          {method: "POST"});
+    const d = await r.json();
+    if (r.ok && d.status === "booked") { showBooked(d.when); closeBook(); return; }
+    txt($("bookMsg"), d.status === "unavailable" ? "That time has just been taken. Please pick another one."
+                                                 : "We couldn't book that just now. Please try another time or message us on WhatsApp.");
+  } catch (e) { txt($("bookMsg"), "We couldn't reach the server. Please try again."); }
+  btns.forEach(b => b.disabled = false);
 }
 
 /* ---------- voice call status, reported by the widget inside the phone ---------- */

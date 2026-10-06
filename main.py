@@ -30,15 +30,89 @@ from scraper import mobile_preview, scrape_company  # noqa: E402
 WIDGET_ID = "6abf5919cb9ce9d3ea4df163"
 WIDGET_LOCATION_ID = "s9jsy9dp0zOh0nDsRvcD"
 DEFAULT_WIDGET_ID = WIDGET_ID
+
+# ---------------------------------------------------------------- lines: several visitors at the same time
+# A "line" is one GHL voice agent with its own chat widget. Each visitor gets a free line for their demo, so two
+# companies can be demonstrated at once without mixing them up. When every line is busy the visitor waits in a
+# queue ("Please wait, the line is busy") and is connected as soon as a line is free.
+# To add a line: duplicate the agent and the chat widget in GHL, point the new widget at the new agent, and add
+# the pair below - or put all pairs in .env as  GHL_LINES=agentId:widgetId,agentId:widgetId
+DEFAULT_LINES = [(os.getenv("GHL_AGENT_ID") or "6abdf3955deba8d1c1f3ac30", WIDGET_ID),
+                 ("6ac51060e7267112e69b5de7", "6ac51135f1d5945734fe5e9f")]
+LINE_HOLD = int(os.getenv("LINE_HOLD_SECONDS", "420"))     # with people waiting, a visitor keeps a line this long
+LINE_GRACE = int(os.getenv("LINE_GRACE_SECONDS", "90"))    # no sign of life from the page for this long = they left
+
+
+def _read_lines() -> list[dict]:
+    pairs = [tuple(x.strip().split(":")) for x in os.getenv("GHL_LINES", "").split(",") if ":" in x] or DEFAULT_LINES
+    out, seen = [], set()
+    for agent, widget in [p for p in pairs if len(p) == 2]:
+        agent, widget = agent.strip(), widget.strip()
+        if re.fullmatch(r"[0-9a-fA-F]{24}", agent) and re.fullmatch(r"[0-9a-fA-F]{24}", widget) and agent not in seen:
+            seen.add(agent)
+            out.append({"agent": agent, "widget": widget, "ticket": "", "ref": "", "since": 0.0, "lock": asyncio.Lock()})
+    return out or [{"agent": DEFAULT_LINES[0][0], "widget": WIDGET_ID, "ticket": "", "ref": "", "since": 0.0, "lock": asyncio.Lock()}]
+
+
+LINES: list[dict] = _read_lines()
+WAITING: dict[str, dict] = {}       # ticket -> {"ts": first asked, "seen": last asked}; first come, first served
+JOBS: dict[str, dict] = {}          # ticket -> work started for a visitor (contact saved, website being read)
 app = FastAPI(title="Voice AI Agent Demo")
 print("=" * 60)
 print("GHL agent updates:", "ON" if ghl.configured() else
       "OFF (DEMO MODE) - fill GHL_API_KEY, GHL_LOCATION_ID, GHL_AGENT_ID in .env")
-print("Widget ID:", WIDGET_ID)
+print("Lines (agent / widget):", ", ".join(f"{l['agent']} / {l['widget']}" for l in LINES))
 print("=" * 60)
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
-_agent_lock = asyncio.Lock()  # one shared demo agent -> serialize updates
+
+
+def _line_busy(line: dict, now: float) -> bool:
+    if not line["ticket"]:
+        return False
+    if not line["ref"]:                                      # the visitor's agent is still being prepared
+        return now - line["since"] < 150
+    lead = LEADS.get(line["ref"])
+    return bool(lead) and not lead.get("lineEnded") and now - max(lead.get("seen", 0), line["since"]) < LINE_GRACE
+
+
+def _free_line(line: dict) -> None:
+    """Take the line back. Whoever had it is told their session has ended (their agent is about to change)."""
+    lead = LEADS.get(line["ref"]) if line["ref"] else None
+    if lead:
+        lead["lineEnded"] = True
+    line.update(ticket="", ref="", since=0.0)
+
+
+def acquire_line(ticket: str) -> tuple[dict | None, int, int]:
+    """A line for this visitor -> (line, 0, 0), or (None, place in the queue, rough seconds to wait)."""
+    now = time.time()
+    for t in [t for t, w in WAITING.items() if now - w["seen"] > 20]:       # stopped asking = gave up
+        WAITING.pop(t, None)
+    mine = next((l for l in LINES if l["ticket"] == ticket), None)
+    if mine:
+        return mine, 0, 0
+    w = WAITING.setdefault(ticket, {"ts": now, "seen": now})
+    w["seen"] = now
+    place = sorted(WAITING, key=lambda t: WAITING[t]["ts"]).index(ticket)
+    free = sorted([l for l in LINES if not _line_busy(l, now)], key=lambda l: l["since"])
+    # with somebody waiting, a visitor who has had the line for LINE_HOLD seconds gives it up
+    overdue = sorted([l for l in LINES if l not in free and l["ref"] and now - l["since"] > LINE_HOLD], key=lambda l: l["since"])
+    available = free + overdue
+    if place < len(available):
+        line = available[place]
+        _free_line(line)
+        line.update(ticket=ticket, ref="", since=now)
+        WAITING.pop(ticket, None)
+        return line, 0, 0
+    behind = place - len(available)                          # how many lines must come free before it is my turn
+    left = sorted(max(0.0, LINE_HOLD - (now - l["since"])) for l in LINES if l not in available)
+    wait = (left[behind % len(left)] if left else 0) + (behind // max(len(left), 1)) * LINE_HOLD
+    return None, place + 1, int(wait)
+
+
+def line_of(lead: dict | None) -> dict | None:
+    return next((l for l in LINES if lead and l["ref"] == lead.get("ref")), None)
 
 
 class TrainRequest(BaseModel):
@@ -49,6 +123,7 @@ class TrainRequest(BaseModel):
     website: str
     consent: bool = False
     tz: str = ""          # visitor's timezone from the browser, e.g. Europe/London (used for appointments)
+    ticket: str = ""      # the page's id for this visitor; the same one is sent again while waiting for a free line
 
 
 try:                                   # can this server take its own screenshots (headless Chrome)?
@@ -267,7 +342,7 @@ FRAME_HTML = r"""<!doctype html>
 
 
 @app.get("/preview-frame", response_class=HTMLResponse)
-def preview_frame(site: str = "", name: str = "", mode: str = ""):
+def preview_frame(site: str = "", name: str = "", mode: str = "", w: str = ""):
     """The page shown INSIDE the phone: the visitor's website (live, or a picture) with the GHL widget on top."""
     from html import escape
     from urllib.parse import quote, urlparse
@@ -287,7 +362,7 @@ def preview_frame(site: str = "", name: str = "", mode: str = ""):
             .replace("__THUM__", thum_prefix() + site)
             .replace("__NAME__", escape(name[:80] or p.netloc))
             .replace("__HOST__", escape(p.netloc))
-            .replace("__WIDGET__", WIDGET_ID)
+            .replace("__WIDGET__", w if w in {l["widget"] for l in LINES} else WIDGET_ID)
             .replace("__LOCATION__", WIDGET_LOCATION_ID)
             .replace("__AUTO_OPEN__", "false" if os.getenv("WIDGET_AUTO_OPEN", "1") in ("0", "false", "no") else "true"))
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
@@ -304,7 +379,15 @@ def config():
         "agentPhone": os.getenv("GHL_AGENT_PHONE", ""),
         "ghlConfigured": ghl.configured(),
         "booking": booking_enabled(),
+        "lines": len(LINES),
     }
+
+
+async def _read_site(req: TrainRequest) -> dict:
+    data = await scrape_company(req.website, req.company)
+    if not (data["about"] or data["services"] or data["highlights"] or data["description"]):
+        raise ValueError("Website loaded but no readable text was found.")
+    return data
 
 
 @app.post("/api/train")
@@ -313,16 +396,20 @@ async def train(req: TrainRequest, request: Request):
     if not req.consent:
         raise HTTPException(400, "Please tick the consent box to continue.")
     visitor = req.model_dump()
-    # make sure the voice agent has its booking actions (first run creates them in GHL)
-    actions_task = asyncio.create_task(ensure_booking_actions(public_base(request)))
-    # free appointment times go into the agent's instructions, so it only offers times that can really be booked
-    times_task = asyncio.create_task(prompt_times(get_tz(req.tz)) if booking_enabled() else asyncio.sleep(0, []))
-    consent_line = "Consent to use public website content for the demo: YES (" + \
-                   time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")"
+    ticket = re.sub(r"[^A-Za-z0-9]", "", req.ticket)[:40] or secrets.token_hex(8)
 
-    # 1) save the form to GHL straight away - the lead is kept even if the website can't be read
-    contact_task = asyncio.create_task(
-        ghl.upsert_contact(visitor, req.company, req.website) if ghl.configured() else asyncio.sleep(0))
+    # 1) the first time we hear from this visitor: save the form to GHL straight away (the lead is kept even if
+    #    the website can't be read or they give up waiting) and start reading their website
+    job = JOBS.get(ticket)
+    if not job:
+        for t in [t for t, j in JOBS.items() if t0 - j["ts"] > 1800]:
+            JOBS.pop(t, None)
+        job = JOBS[ticket] = {
+            "ts": t0, "lock": asyncio.Lock(),
+            "consent": "Consent to use public website content for the demo: YES (" + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")",
+            "contact": asyncio.create_task(ghl.upsert_contact(visitor, req.company, req.website) if ghl.configured() else asyncio.sleep(0)),
+            "site": asyncio.create_task(_read_site(req))}
+    contact_task = job["contact"]
 
     async def note(text: str):
         contact = await contact_task
@@ -331,84 +418,127 @@ async def train(req: TrainRequest, request: Request):
         return contact
 
     form_lines = (f"Name: {req.name}\nEmail: {req.email or '-'}\nPhone: {req.phone or '-'}\n"
-                  f"Company: {req.company or '-'}\nWebsite: {req.website}\n{consent_line}")
+                  f"Company: {req.company or '-'}\nWebsite: {req.website}\n{job['consent']}")
 
-    # 2) read the company website
-    try:
-        data = await scrape_company(req.website, req.company)
-        if not (data["about"] or data["services"] or data["highlights"] or data["description"]):
-            raise ValueError("Website loaded but no readable text was found.")
-    except ValueError as e:
+    async def site_failed(e: Exception):
+        JOBS.pop(ticket, None)
+        WAITING.pop(ticket, None)
         await note(f"Pragna AI voice demo request - website could NOT be read\n\n{form_lines}\n\nReason: {e}")
         raise HTTPException(400, str(e))
-    # keep the homepage we fetched so the phone can show the live site
-    home_html, home_url, rendered = data.pop("_home_html", None), data.pop("_home_url", None), data.pop("_rendered", False)
-    if home_html:
-        site_typed = req.website.strip() if "://" in req.website else "https://" + req.website.strip()
-        cache_page([site_typed, home_url, data["website"]], home_html, home_url or data["website"], rendered)
 
-    # remember this lead so the agent (or the button on the page) can book an appointment for them
-    lead = new_lead(visitor, data["company_name"], data["website"])
-    can_book = await actions_task                 # "reply", "send" or ""
-    first = await contact_task
-    lead["contactId"] = (first or {}).get("id") or "" if isinstance(first, dict) else ""
-    had = await current_booking(lead) if booking_enabled() and lead["contactId"] else None   # booked in an earlier visit?
-    prompt = build_agent_prompt(data, visitor, {
-        "ref": lead["ref"], "tz": lead["tz"], "now": datetime.now(get_tz(lead["tz"])),
-        "replies": can_book == "reply", "existing": (had or {}).get("when", ""),
-        "times": await times_task} if can_book else None)
-    welcome = build_welcome(data, visitor)
+    # 2) a line (voice agent + widget) for this visitor - or a place in the queue
+    line, place, wait = acquire_line(ticket)
+    if not line:
+        if job["site"].done() and not job["site"].cancelled() and isinstance(job["site"].exception(), ValueError):   # no point in waiting
+            await site_failed(job["site"].exception())
+        return {"status": "busy", "ticket": ticket, "position": place, "waitSeconds": wait,
+                "message": "Please wait, the line is busy."}
 
-    # run in parallel: train GHL agent, save contact, take mobile screenshot of the site
-    async def update_agent():
-        if not ghl.configured():
-            return "demo-mode (GHL not configured)"
-        async with _agent_lock:
+    async with job["lock"]:
+        if job.get("result"):                                # asked twice for the same finished job
+            return job["result"]
+        done = False
+        try:
+            # 3) their company website (usually read already while they waited)
             try:
-                await ghl.update_voice_agent(prompt, welcome)
-                return "updated"
-            except RuntimeError as e:
-                print("[ghl]", e)
-                return f"error: {e}"
+                data = await job["site"]
+            except ValueError as e:
+                await site_failed(e)
+            # keep the homepage we fetched so the phone can show the live site
+            home_html, home_url, rendered = data.pop("_home_html", None), data.pop("_home_url", None), data.pop("_rendered", False)
+            if home_html:
+                site_typed = req.website.strip() if "://" in req.website else "https://" + req.website.strip()
+                cache_page([site_typed, home_url, data["website"]], home_html, home_url or data["website"], rendered)
 
-    async def save_contact():
-        if not ghl.configured():
-            return None
-        services = ", ".join(data["services"][:10]) or "-"
-        return await note(
-            f"Pragna AI voice demo request\n\n{form_lines}\n\n"
-            f"Scraped company: {data['company_name']} ({data['website']})\n"
-            f"Description: {data.get('description') or '-'}\n"
-            f"Services: {services}\n"
-            f"Phones: {', '.join(data['phones']) or '-'} | Emails: {', '.join(data['emails']) or '-'}\n"
-            f"Pages read: {len(data['pages_scraped'])}")
+            # remember this lead so the agent (or the button on the page) can book an appointment for them
+            lead = new_lead(visitor, data["company_name"], data["website"])
+            lead.update(agent=line["agent"], widget=line["widget"], seen=time.time())
+            line["ref"] = lead["ref"]
+            # this line's agent has its booking actions (first run creates them in GHL); free appointment times go
+            # into the agent's instructions, so it only offers times that can really be booked
+            can_book, times, first = await asyncio.gather(
+                ensure_booking_actions(public_base(request), line["agent"]),      # "reply", "send" or ""
+                prompt_times(get_tz(req.tz)) if booking_enabled() else asyncio.sleep(0, []),
+                contact_task)
+            lead["contactId"] = (first or {}).get("id") or "" if isinstance(first, dict) else ""
+            had = await current_booking(lead) if booking_enabled() and lead["contactId"] else None   # booked in an earlier visit?
+            prompt = build_agent_prompt(data, visitor, {
+                "ref": lead["ref"], "tz": lead["tz"], "now": datetime.now(get_tz(lead["tz"])),
+                "replies": can_book == "reply", "existing": (had or {}).get("when", ""),
+                "times": times} if can_book else None)
+            welcome = build_welcome(data, visitor)
 
-    agent_status, contact, preview, chat_status = await asyncio.gather(
-        update_agent(), save_contact(), mobile_preview(data["website"]), update_chat_bot(data, visitor))
-    lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
-    save_state()
-    # brand colour: what the page really renders, else what its stylesheets say
-    theme = preview.get("theme") if (preview.get("theme") or {}).get("primary") else data.get("theme")
+            # run in parallel: train this line's GHL agent, save contact, take mobile screenshot of the site
+            async def update_agent():
+                if not ghl.configured():
+                    return "demo-mode (GHL not configured)"
+                async with line["lock"]:
+                    try:
+                        await ghl.update_voice_agent(prompt, welcome, line["agent"])
+                        return "updated"
+                    except RuntimeError as e:
+                        print("[ghl]", e)
+                        return f"error: {e}"
 
-    return {
-        "status": "ok",
-        "agentStatus": agent_status,
-        "seconds": round(time.time() - t0, 1),
-        "company": {k: data[k] for k in ("company_name", "website", "description", "services",
-                                         "hours", "address", "emails", "phones", "socials", "pages_scraped")},
-        "faqCount": len(data["faqs"]),
-        "welcomeMessage": welcome,
-        "promptPreview": prompt[:1500],
-        "promptChars": len(prompt),
-        "contact": contact,
-        "screenshot": preview.get("screenshot"),
-        "previewBlocked": bool(preview.get("blocked")),
-        "theme": theme,
-        "bookingRef": lead["ref"] if booking_enabled() else "",
-        "agentCanBook": bool(can_book),
-        "chatStatus": chat_status,
-        "booking": booking_status(lead["ref"]),
-    }
+            async def save_contact():
+                if not ghl.configured():
+                    return None
+                services = ", ".join(data["services"][:10]) or "-"
+                return await note(
+                    f"Pragna AI voice demo request\n\n{form_lines}\n\n"
+                    f"Scraped company: {data['company_name']} ({data['website']})\n"
+                    f"Description: {data.get('description') or '-'}\n"
+                    f"Services: {services}\n"
+                    f"Phones: {', '.join(data['phones']) or '-'} | Emails: {', '.join(data['emails']) or '-'}\n"
+                    f"Pages read: {len(data['pages_scraped'])}")
+
+            agent_status, contact, preview, chat_status = await asyncio.gather(
+                update_agent(), save_contact(), mobile_preview(data["website"]), update_chat_bot(data, visitor))
+            lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
+            lead["seen"] = time.time()
+            save_state()
+            # brand colour: what the page really renders, else what its stylesheets say
+            theme = preview.get("theme") if (preview.get("theme") or {}).get("primary") else data.get("theme")
+
+            job["result"] = {
+                "status": "ok",
+                "agentStatus": agent_status,
+                "seconds": round(time.time() - t0, 1),
+                "company": {k: data[k] for k in ("company_name", "website", "description", "services",
+                                                 "hours", "address", "emails", "phones", "socials", "pages_scraped")},
+                "faqCount": len(data["faqs"]),
+                "welcomeMessage": welcome,
+                "promptPreview": prompt[:1500],
+                "promptChars": len(prompt),
+                "contact": contact,
+                "screenshot": preview.get("screenshot"),
+                "previewBlocked": bool(preview.get("blocked")),
+                "theme": theme,
+                "ref": lead["ref"],
+                "widgetId": line["widget"],
+                "line": LINES.index(line) + 1,
+                "bookingRef": lead["ref"] if booking_enabled() else "",
+                "agentCanBook": bool(can_book),
+                "chatStatus": chat_status,
+                "booking": booking_status(lead["ref"]),
+            }
+            done = True
+            return job["result"]
+        finally:
+            if not done:                                     # something went wrong: don't keep the line blocked
+                JOBS.pop(ticket, None)
+                if line["ticket"] == ticket:
+                    line.update(ticket="", ref="", since=0.0)
+
+
+@app.api_route("/api/release", methods=["GET", "POST"])
+def release(ref: str = ""):
+    """The visitor closed the page: their line is free for the next person straight away."""
+    lead = LEADS.get(re.sub(r"[^A-Z0-9]", "", ref.upper()))
+    line = line_of(lead)
+    if line:
+        _free_line(line)
+    return {"ok": True}
 
 
 # ================================================================ appointments + opportunities
@@ -533,15 +663,26 @@ def _action_params(kind: str, base: str, method: str = "GET") -> dict:
             "selectedPaths": ["status", "message"] if method == "GET" else []}
 
 
-async def ensure_booking_actions(base: str, force: bool = False) -> str:
-    """Make sure the booking actions are on the GHL voice agent.
+def _astate(agent: str) -> dict:
+    """What we know about one agent's booking actions. (Older versions kept a single agent's state unkeyed.)"""
+    st = STATE.setdefault("actions", {})
+    if any(k in st for k in ("base", "slots", "book", "change", "cancel", "checked", "mode", "failed")):
+        old = dict(st)
+        st.clear()
+        st[LINES[0]["agent"]] = old
+    return st.setdefault(agent or LINES[0]["agent"], {})
+
+
+async def ensure_booking_actions(base: str, agent: str = "", force: bool = False) -> str:
+    """Make sure the booking actions are on one of the GHL voice agents (every line has its own agent).
     Returns "reply" (agent books and hears the answer), "send" (agent can only send the request) or "" (cannot book).
     An action that is already on the agent is left alone - GHL's "update action" call fails - unless it points at
     another address, in which case it is deleted and created again."""
     if not base or not booking_enabled():
         return ""
+    agent = agent or LINES[0]["agent"]
     async with _actions_lock:
-        st = STATE.setdefault("actions", {})
+        st = _astate(agent)
         now = time.time()
         ready = all(st.get(k) for k in ACTION_NAMES)
         if not force:
@@ -549,7 +690,7 @@ async def ensure_booking_actions(base: str, force: bool = False) -> str:
                 return st.get("mode", "reply")
             if now - st.get("failed", 0) < 300:       # e.g. token has no permission: don't retry on every visitor
                 return ""
-        existing = await ghl.agent_actions()          # None = could not read the agent
+        existing = await ghl.agent_actions(agent)     # None = could not read the agent
         methods, errors, notes = {}, [], []
         for kind, name in ACTION_NAMES.items():
             url = f"{base}/api/ghl/{kind}"
@@ -566,17 +707,17 @@ async def ensure_booking_actions(base: str, force: bool = False) -> str:
                     notes.append(f"'{name}' points at {found['url']} (expected {url})")
                     continue
                 st.setdefault("replaced", {})[kind] = now
-                if not await ghl.delete_action(found["id"]):
+                if not await ghl.delete_action(found["id"], agent):
                     notes.append(f"'{name}' points at {found['url']} and could not be replaced")
                     continue
-            res = await ghl.save_custom_action(name, _action_params(kind, base, "GET"))
+            res = await ghl.save_custom_action(name, _action_params(kind, base, "GET"), agent)
             method = "GET"
             if not res.get("id") and res.get("status") in (400, 422) and "same name" not in (res.get("error") or "").lower():
-                res = await ghl.save_custom_action(name, _action_params(kind, base, "POST"))   # this account wants POST: send-only
+                res = await ghl.save_custom_action(name, _action_params(kind, base, "POST"), agent)   # this account wants POST: send-only
                 method = "POST"
             if res.get("id"):
                 st[kind], methods[kind] = res["id"], method
-                print(f"[booking] agent action '{name}' ready ({method}) -> {url}")
+                print(f"[booking] agent {agent}: action '{name}' ready ({method}) -> {url}")
             elif "same name" in (res.get("error") or "").lower():       # it is there, we just could not see it
                 st[kind], methods[kind] = st.get(kind) or "on-agent", "GET"
             else:
@@ -1208,7 +1349,7 @@ async def book_for(lead: dict, date_s: str, time_s: str, source: str = "agent") 
     old = await current_booking(lead) or {}
     if old and _parse_when(old.get("start", ""), tz) == start:
         return {"status": "booked", "message": f"Already booked: {when} ({tz_name(tz)} time).", "when": when, "start": old["start"]}
-    one_way = source == "agent" and STATE.get("actions", {}).get("mode") == "send"   # the agent will not hear our answer
+    one_way = source == "agent" and _astate(lead.get("agent", "")).get("mode") == "send"   # the agent will not hear our answer
 
     appt, problem = {}, ""
     if not cfg["calendarId"]:
@@ -1297,7 +1438,8 @@ def booking_status(ref: str = ""):
     b = (lead or {}).get("booking") or {}
     return {"booked": bool(b) and not b.get("cancelled"), "cancelled": bool(b.get("cancelled")),
             "when": b.get("when", ""), "timezone": (lead or {}).get("tz", ""),
-            "tried": "" if b and not b.get("cancelled") else (lead or {}).get("tried", "")}
+            "tried": "" if b and not b.get("cancelled") else (lead or {}).get("tried", ""),
+            "line": "ended" if (lead or {}).get("lineEnded") else "active"}
 
 
 # ---------------------------------------------------------------- booking check (what works, what GHL refused)
@@ -1331,18 +1473,28 @@ async def booking_check(base: str) -> dict:
     if not (booking_enabled() and base):
         return {"ok": False, "steps": steps, "calls": []}
 
-    mode = await ensure_booking_actions(base, force=True)
-    on_agent = await ghl.agent_actions()
-    step("The server can read the voice agent", on_agent is not None,
-         _ghl_problem("agent") or f"{len(on_agent or [])} action(s) on the agent")
-    names = {x.get("name") for x in on_agent or []}
-    missing = [n for n in ACTION_NAMES.values() if n not in names]
-    step("Book / change / cancel actions are on the agent", bool(mode) and (on_agent is None or not missing),
-         ((_ghl_problem("actions") or STATE.get("actions", {}).get("error")) if not mode else "")
-         or ("Missing: " + ", ".join(missing) if missing else
-             "; ".join(STATE.get("actions", {}).get("notes", [])) or
-             "The agent hears the result of each action." if mode == "reply" else
-             "GHL accepted send-only actions: the agent sends the request but does not hear the result."))
+    debug_actions, mode = {}, ""
+    for i, line in enumerate(LINES, 1):
+        tag = f"Line {i}: " if len(LINES) > 1 else ""
+        mode = await ensure_booking_actions(base, line["agent"], force=True)
+        on_agent = await ghl.agent_actions(line["agent"])
+        st = _astate(line["agent"])
+        step(tag + "the server can read the voice agent", on_agent is not None,
+             _ghl_problem("agent") or f"agent {line['agent']} / widget {line['widget']} | {len(on_agent or [])} action(s) on the agent")
+        names = {x.get("name") for x in on_agent or []}
+        missing = [n for n in ACTION_NAMES.values() if n not in names]
+        step(tag + "book / change / cancel actions are on the agent", bool(mode) and (on_agent is None or not missing),
+             ((_ghl_problem("actions") or st.get("error")) if not mode else "")
+             or ("Missing: " + ", ".join(missing) if missing else
+                 "; ".join(st.get("notes", [])) or
+                 "The agent hears the result of each action." if mode == "reply" else
+                 "GHL accepted send-only actions: the agent sends the request but does not hear the result."))
+        debug_actions[line["agent"]] = [{k: x.get(k) for k in ("name", "type", "method", "url", "keys", "paramKeys")} | {"hasId": bool(x.get("id"))}
+                                        for x in on_agent or []]
+    now = time.time()
+    step("Lines for visitors", True, " | ".join(
+        f"Line {i}: " + (f"busy for {int((now - l['since']) // 60)} min" if _line_busy(l, now) else "free") for i, l in enumerate(LINES, 1))
+        + f" | waiting: {len(WAITING)} | a visitor keeps a line up to {LINE_HOLD // 60} min when others are waiting")
 
     _bcfg["ts"] = 0.0
     cfg = await booking_config()
@@ -1394,9 +1546,7 @@ async def booking_check(base: str) -> dict:
          "actions: check that the chat widget uses this agent and that the four actions are switched on in GHL.")
     calls = [{"time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(e["ts"])), "what": e["kind"], "from": e["source"],
               "result": e["status"], "detail": e["detail"]} for e in reversed(EVENTS[-25:])]
-    debug = {"voiceActions": [{k: x.get(k) for k in ("name", "type", "method", "url", "keys", "paramKeys")} | {"hasId": bool(x.get("id"))}
-                              for x in on_agent or []],
-             "actionNotes": STATE.get("actions", {}).get("notes", []), "mode": mode,
+    debug = {"voiceActions": debug_actions, "mode": mode,
              "chat": {k: v for k, v in STATE.get("chat", {}).items() if k in ("id", "bot", "error", "actionError", "backupAt", "updated")}}
     return {"ok": all(x["ok"] is not False for x in steps), "steps": steps, "calls": calls, "debug": debug}
 

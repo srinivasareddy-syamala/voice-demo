@@ -20,10 +20,11 @@ def configured() -> bool:
     return all(os.getenv(k) for k in ("GHL_API_KEY", "GHL_LOCATION_ID", "GHL_AGENT_ID"))
 
 
-async def update_voice_agent(prompt: str, welcome: str) -> dict:
+async def update_voice_agent(prompt: str, welcome: str, agent_id: str = "") -> dict:
     """PATCH /voice-ai/agents/{agentId}  (scope: voice-ai-agents.write).
-    Only prompt + first message change; name, voice, widget etc. stay as set in GHL."""
-    url = f"{BASE}/voice-ai/agents/{os.environ['GHL_AGENT_ID']}"
+    Only prompt + first message change; name, voice, widget etc. stay as set in GHL.
+    agent_id = which of the demo's agents (lines); empty = GHL_AGENT_ID."""
+    url = f"{BASE}/voice-ai/agents/{agent_id or os.environ['GHL_AGENT_ID']}"
     body = {"agentPrompt": prompt, "welcomeMessage": welcome}
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.patch(url, params={"locationId": os.environ["GHL_LOCATION_ID"]},
@@ -226,9 +227,9 @@ def _voice_version() -> str:
     return os.getenv("GHL_VOICE_API_VERSION", "v3")
 
 
-async def agent_actions() -> list[dict] | None:
+async def agent_actions(agent_id: str = "") -> list[dict] | None:
     """Actions already on the agent (GET /voice-ai/agents/{id}, scope voice-ai-agents.readonly). None = could not read."""
-    s, j = await _call("GET", f"/voice-ai/agents/{os.environ['GHL_AGENT_ID']}", _voice_version(),
+    s, j = await _call("GET", f"/voice-ai/agents/{agent_id or os.environ['GHL_AGENT_ID']}", _voice_version(),
                        params={"locationId": os.environ["GHL_LOCATION_ID"]})
     if s != 200:
         return None
@@ -244,18 +245,18 @@ async def agent_actions() -> list[dict] | None:
     return out
 
 
-async def delete_action(action_id: str) -> bool:
+async def delete_action(action_id: str, agent_id: str = "") -> bool:
     """DELETE /voice-ai/actions/{id} (scope: voice-ai-agent-goals.write)"""
     s, _ = await _call("DELETE", f"/voice-ai/actions/{action_id}", _voice_version(),
-                       params={"locationId": os.environ["GHL_LOCATION_ID"], "agentId": os.environ["GHL_AGENT_ID"]})
+                       params={"locationId": os.environ["GHL_LOCATION_ID"], "agentId": agent_id or os.environ["GHL_AGENT_ID"]})
     return s in (200, 204)
 
 
-async def save_custom_action(name: str, params: dict) -> dict:
+async def save_custom_action(name: str, params: dict, agent_id: str = "") -> dict:
     """POST /voice-ai/actions (scope: voice-ai-agent-goals.write). A custom action lets the voice agent call our
     server during a call. Create only: GHL's update call has answered "Maximum call stack size exceeded", so an
     action that must change is deleted and created again. -> {"id"} or {"error", "status"}."""
-    body = {"agentId": os.environ["GHL_AGENT_ID"], "locationId": os.environ["GHL_LOCATION_ID"],
+    body = {"agentId": agent_id or os.environ["GHL_AGENT_ID"], "locationId": os.environ["GHL_LOCATION_ID"],
             "actionType": "CUSTOM_ACTION", "name": name, "actionParameters": params}
     ver = _voice_version()
     s, j = await _call("POST", "/voice-ai/actions", ver, json=body)

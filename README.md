@@ -77,6 +77,20 @@ Setup:
    "appointment" or "booked". To choose exactly, set `GHL_CALENDAR_ID`, `GHL_PIPELINE_ID`, `GHL_PIPELINE_STAGE_ID`.
 3. Restart, submit the form once, then open the check page.
 
+## Several visitors at once: lines and the queue
+A **line** is one GHL voice agent with its own chat widget. Each visitor is given a free line, their company is
+written into that line's agent, and their phone preview loads that line's widget, so two companies can be shown
+at the same time without being mixed up. Two lines are built in (`DEFAULT_LINES` in `main.py`); list more in
+`GHL_LINES=agentId:widgetId,…` after duplicating the agent and the widget in GHL (the new widget must use the new agent).
+
+When every line is in use the visitor sees **"Please wait, the line is busy"** with their place in the queue and is
+connected automatically, first come first served. A line becomes free when its visitor closes the page, when the
+page has been silent for 90 seconds, or - only if somebody is waiting - after `LINE_HOLD_SECONDS` (7 minutes).
+The visitor who lost the line sees "Your demo session has ended" with a Start again button.
+The lead is saved in GHL as soon as the form is sent, even if the visitor gives up waiting.
+
+The text chat bot is shared by all lines (GHL has one primary chat bot), so it knows the most recent visitor's company.
+
 ## Text chat in the widget
 "Chat via Live Chat" and "Chat via SMS/Email" are answered by GHL's **Conversation AI bot**, a different bot from the
 Voice AI agent. On every form submission the app also writes the visitor's company into that bot, sets it to

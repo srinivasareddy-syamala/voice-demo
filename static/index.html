@@ -257,6 +257,15 @@
   .times button{padding:10px 6px;border-radius:10px;border:1px solid var(--line);background:#F8FAFC;color:var(--navy);font:600 13.5px "Plus Jakarta Sans",sans-serif;cursor:pointer}
   .times button:hover{border-color:#2563EB;background:#EFF6FF} .times button:disabled{opacity:.5;cursor:wait}
   .modal .msg{margin-top:12px;font-size:13px;font-weight:600;color:var(--err)} .modal .msg:empty{display:none}
+  /* "please wait, the line is busy" pop-up and the "session ended" cover on the phone */
+  .busy{text-align:center} .busy .ring{width:54px;height:54px;margin:4px auto 12px;border-radius:50%;border:5px solid #DBEAFE;border-top-color:#2563EB;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .busy h3{margin:0 0 6px} .busy p{margin:0 0 6px} .busy .pos{font-weight:700;color:var(--navy);font-size:14px}
+  .busy .btn.alt{margin-top:14px;padding:11px;font-size:14px}
+  .ended{position:absolute;inset:0;z-index:6;background:#0F172Af2;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;
+         gap:10px;padding:22px;text-align:center;border-radius:inherit}
+  .ended b{font-size:17px} .ended span{font-size:13px;line-height:1.5;opacity:.9}
+  .ended button{margin-top:6px;padding:11px 18px;border:0;border-radius:12px;background:var(--grad);color:#fff;font:700 14px "Plus Jakarta Sans",sans-serif;cursor:pointer}
   .modal .cancel{margin-top:14px;padding:0;border:0;background:none;color:var(--err);font:600 13px "Plus Jakarta Sans",sans-serif;cursor:pointer;text-decoration:underline}
   .booked.off{background:#F1F5F9;color:#475569}
   /* The inside of the phone is rendered 390px wide (a real phone) and scaled down to fit,
@@ -471,6 +480,9 @@
     <div class="screen">
       <div class="urlbar">🔒 <span id="urlText"></span></div>
       <iframe id="pv" class="site" title="Your website with the AI Receptionist" allow="microphone *; autoplay *; clipboard-write *"></iframe>
+      <div class="ended hidden" id="ended"><b>Your demo session has ended</b>
+        <span>The line was passed to the next visitor. You can start a fresh demo at any time.</span>
+        <button type="button" onclick="location.reload()">Start again</button></div>
     </div>
   </div>
   <div class="info-rest">
@@ -506,6 +518,16 @@
     <div class="times" id="bookTimes"></div>
     <div class="msg" id="bookMsg"></div>
     <button type="button" class="cancel hidden" id="bookCancel">Cancel my appointment</button>
+  </div>
+</div>
+<!-- every line is in use: the visitor waits here and is connected automatically -->
+<div class="modal hidden" id="busyModal" role="alertdialog" aria-modal="true" aria-labelledby="busyTitle">
+  <div class="box busy">
+    <div class="ring" aria-hidden="true"></div>
+    <h3 id="busyTitle">Please wait, the line is busy</h3>
+    <p>All our AI Receptionists are with other visitors right now. Keep this page open — yours starts automatically as soon as a line is free.</p>
+    <p class="pos" id="busyPos"></p>
+    <button type="button" class="btn alt" id="busyCancel">Cancel</button>
   </div>
 </div>
 <div class="warn hidden" id="warn"></div>
@@ -592,10 +614,24 @@ $("form").addEventListener("submit", async e => {
   closeSheet(); $("landing").classList.add("hidden"); $("progress").classList.remove("hidden");
   window.scrollTo(0, 0);
   const prog = runProgress(PROGRESS_SECONDS);
+  body.ticket = Array.from(crypto.getRandomValues(new Uint8Array(12)), x => x.toString(16).padStart(2, "0")).join("");
+  let cancelled = false;
+  $("busyCancel").onclick = () => { cancelled = true; };
   try {
-    const r = await fetch(API + "/api/train", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || "Something went wrong, please try again.");
+    let r, data;
+    for (;;) {                                               // "busy" = every line is in use: keep our place and ask again
+      r = await fetch(API + "/api/train", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+      data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "Something went wrong, please try again.");
+      if (data.status !== "busy") break;
+      const mins = Math.max(1, Math.ceil((data.waitSeconds || 0) / 60));
+      txt($("busyPos"), "You are number " + data.position + " in the queue" +
+                        (data.waitSeconds ? " — about " + mins + " minute" + (mins > 1 ? "s" : "") + " at most." : "."));
+      $("busyModal").classList.remove("hidden");
+      for (let i = 0; i < 16 && !cancelled; i++) await new Promise(res => setTimeout(res, 250));   // 4 s
+      if (cancelled) throw new Error("You left the queue. Submit the form again whenever you're ready.");
+    }
+    $("busyModal").classList.add("hidden");
     const wait = PROGRESS_SECONDS - prog.elapsed();          // always show the full 25 s bar
     if (wait > 0) await new Promise(res => setTimeout(res, wait * 1000));
     prog.finish();
@@ -603,6 +639,7 @@ $("form").addEventListener("submit", async e => {
     showCompany(data);
   } catch (ex) {
     prog.finish();
+    $("busyModal").classList.add("hidden");
     $("progress").classList.add("hidden"); $("landing").classList.remove("hidden");
     const offline = ex instanceof TypeError;               // "Failed to fetch" = the server could not be reached
     openSheet();
@@ -632,14 +669,14 @@ function showCompany(d){
     encodeURIComponent("Hi Pragna AI, I just tried the AI Receptionist demo for " + c.company_name + " and would like to know more.");
 
   applyTheme(d.theme);
-  setupBooking(d.bookingRef, d.booking);
+  setupBooking(d.bookingRef, d.booking, d.ref);
 
   // phone = their website (thum.io screenshot) with the GHL chat widget at the bottom
   try { sessionStorage.setItem("pv_shot", d.screenshot || ""); } catch (e) {}
   // own = our phone-layout screenshot; card = the site blocks screenshots; thum = thum.io
   const mode = d.screenshot ? "own" : d.previewBlocked ? "card" : "thum";
   $("pv").src = API + "/preview-frame?site=" + encodeURIComponent(SITE || c.website) +
-                "&name=" + encodeURIComponent(c.company_name) + "&mode=" + mode;
+                "&name=" + encodeURIComponent(c.company_name) + "&mode=" + mode + "&w=" + encodeURIComponent(d.widgetId || "");
 
   const updated = d.agentStatus === "updated";
   $("warn").classList.toggle("hidden", updated);
@@ -682,23 +719,37 @@ function showBooking(b){                                  // b = {booked, cancel
   }
   txt($("bookBtn").lastChild, HAS_BOOKING ? " Change time" : " Book an appointment");
 }
-function setupBooking(ref, now){
+let SESSION_REF = "";
+function endSession(){                                    // our line was given to the next visitor (or we were away too long)
+  clearInterval(bookPoll);
+  $("pv").src = "about:blank";
+  $("ended").classList.remove("hidden");
+  setStatus("", "");
+}
+function setupBooking(ref, now, session){
   BOOK_REF = ref || "";
+  SESSION_REF = session || ref || "";
   $("bookBtn").classList.toggle("hidden", !BOOK_REF);
+  $("ended").classList.add("hidden");
   showBooking(now);
   clearInterval(bookPoll);
-  if (!BOOK_REF) return;
-  let last = JSON.stringify(now || {}), tries = 0;        // follow what the agent does during the call
+  if (!SESSION_REF) return;
+  let last = JSON.stringify(now || {}), tries = 0;
+  // every 10 s: tells the server this visitor is still here (keeps their line), and follows what the agent does
   bookPoll = setInterval(async () => {
-    if (++tries > 180) return clearInterval(bookPoll);   // 30 minutes
-    if (document.hidden) return;
+    if (++tries > 180) return endSession();              // 30 minutes
     try {
-      const b = await (await fetch(API + "/api/booking?ref=" + encodeURIComponent(BOOK_REF))).json();
+      const b = await (await fetch(API + "/api/booking?ref=" + encodeURIComponent(SESSION_REF))).json();
+      if (b.line === "ended") return endSession();
       const sig = JSON.stringify(b);
       if (sig !== last) { last = sig; showBooking(b); }
     } catch (e) {}
   }, 10000);
 }
+window.addEventListener("pagehide", () => {               // closing the page frees the line for the next visitor at once
+  if (SESSION_REF && $("ended").classList.contains("hidden"))
+    try { navigator.sendBeacon(API + "/api/release?ref=" + encodeURIComponent(SESSION_REF)); } catch (e) {}
+});
 const closeBook = () => $("bookModal").classList.add("hidden");
 $("bookClose").addEventListener("click", closeBook);
 $("bookModal").addEventListener("click", e => { if (e.target === $("bookModal")) closeBook(); });

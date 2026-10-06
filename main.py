@@ -7,13 +7,14 @@ import os
 import re
 import secrets
 import time
+import traceback
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -63,6 +64,15 @@ print("GHL agent updates:", "ON" if ghl.configured() else
       "OFF (DEMO MODE) - fill GHL_API_KEY, GHL_LOCATION_ID, GHL_AGENT_ID in .env")
 print("Lines (agent / widget):", ", ".join(f"{l['agent']} / {l['widget']}" for l in LINES))
 print("=" * 60)
+
+
+@app.exception_handler(Exception)
+async def _crash(request: Request, e: Exception):
+    """Anything unexpected: keep the details for the check page, give the visitor a plain message (as JSON)."""
+    record_error(f"{request.method} {request.url.path}", e)
+    return JSONResponse({"detail": "Something went wrong on our side. Please try again in a minute."}, status_code=500)
+
+
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
 
@@ -412,7 +422,7 @@ async def train(req: TrainRequest, request: Request):
     contact_task = job["contact"]
 
     async def note(text: str):
-        contact = await contact_task
+        contact = await guarded("saving the contact", contact_task, None)
         if isinstance(contact, dict) and contact.get("id"):
             await ghl.add_note(contact["id"], text)
         return contact
@@ -457,11 +467,12 @@ async def train(req: TrainRequest, request: Request):
             # this line's agent has its booking actions (first run creates them in GHL); free appointment times go
             # into the agent's instructions, so it only offers times that can really be booked
             can_book, times, first = await asyncio.gather(
-                ensure_booking_actions(public_base(request), line["agent"]),      # "reply", "send" or ""
-                prompt_times(get_tz(req.tz)) if booking_enabled() else asyncio.sleep(0, []),
-                contact_task)
+                guarded("booking actions on the agent", ensure_booking_actions(public_base(request), line["agent"]), ""),   # "reply", "send" or ""
+                guarded("free appointment times", prompt_times(get_tz(req.tz)) if booking_enabled() else asyncio.sleep(0, []), []),
+                guarded("saving the contact", contact_task, None))
             lead["contactId"] = (first or {}).get("id") or "" if isinstance(first, dict) else ""
-            had = await current_booking(lead) if booking_enabled() and lead["contactId"] else None   # booked in an earlier visit?
+            had = (await guarded("looking for an earlier appointment", current_booking(lead), None)
+                   if booking_enabled() and lead["contactId"] else None)             # booked in an earlier visit?
             prompt = build_agent_prompt(data, visitor, {
                 "ref": lead["ref"], "tz": lead["tz"], "now": datetime.now(get_tz(lead["tz"])),
                 "replies": can_book == "reply", "existing": (had or {}).get("when", ""),
@@ -476,7 +487,7 @@ async def train(req: TrainRequest, request: Request):
                     try:
                         await ghl.update_voice_agent(prompt, welcome, line["agent"])
                         return "updated"
-                    except RuntimeError as e:
+                    except Exception as e:
                         print("[ghl]", e)
                         return f"error: {e}"
 
@@ -493,7 +504,9 @@ async def train(req: TrainRequest, request: Request):
                     f"Pages read: {len(data['pages_scraped'])}")
 
             agent_status, contact, preview, chat_status = await asyncio.gather(
-                update_agent(), save_contact(), mobile_preview(data["website"]), update_chat_bot(data, visitor))
+                update_agent(), guarded("contact note", save_contact(), None),
+                guarded("phone preview", mobile_preview(data["website"]), {}),
+                guarded("chat bot", update_chat_bot(data, visitor), "error: see the check page"))
             lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
             lead["seen"] = time.time()
             save_state()
@@ -556,6 +569,7 @@ except (OSError, ValueError):
     pass
 LEADS: dict[str, dict] = STATE.setdefault("leads", {})
 EVENTS: list[dict] = STATE.setdefault("events", [])           # what the agent / page asked for, and the outcome
+SERVER_ERRORS: list[dict] = STATE.setdefault("errors", [])    # unexpected errors, newest last (see record_error)
 _bg: set = set()                                              # background jobs (kept so they are not dropped)
 _actions_lock = asyncio.Lock()
 _book_lock = asyncio.Lock()
@@ -567,9 +581,33 @@ def save_state() -> None:
     try:
         keep = {r: {k: v for k, v in l.items() if k not in ("email", "phone")} for r, l in LEADS.items()}
         STATE_FILE.write_text(json.dumps({"actions": STATE.get("actions", {}), "chat": STATE.get("chat", {}), "leads": keep,
-                                          "events": EVENTS[-60:]}), encoding="utf-8")
-    except OSError as e:
+                                          "events": EVENTS[-60:], "errors": SERVER_ERRORS[-30:]}, default=str), encoding="utf-8")
+    except Exception as e:
         print("[booking] could not save state:", e)
+
+
+def record_error(where: str, e: BaseException) -> None:
+    """Remember an unexpected error (shown on the check page) and print the full traceback to the log."""
+    try:
+        tb = traceback.extract_tb(e.__traceback__)
+        spot = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(tb[-4:]))
+        SERVER_ERRORS.append({"ts": time.time(), "where": where, "error": f"{type(e).__name__}: {e}"[:300], "at": spot[:300]})
+        del SERVER_ERRORS[:-30]
+        print(f"[error] {where}: " + "".join(traceback.format_exception(type(e), e, e.__traceback__))[-2500:])
+        save_state()
+    except Exception:
+        pass
+
+
+async def guarded(where: str, coro, default):
+    """Run an optional step. If it fails, the demo carries on without it and the error is kept for the check page."""
+    try:
+        return await coro
+    except HTTPException:
+        raise
+    except Exception as e:
+        record_error(where, e)
+        return default
 
 
 def log_event(kind: str, source: str, status: str, detail: str = "") -> None:
@@ -974,7 +1012,7 @@ async def ghl_slots(request: Request):
     """Free appointment times. Used by the voice agent ("Check appointment times") and by the page."""
     a = await _args(request)
     lead, source = _caller(request, a, "slots")
-    return _done("slots", source, lead, await slots_for(lead, _when_args(a)[0]), a)
+    return _done("slots", source, lead, await guarded("free times for the agent", slots_for(lead, _when_args(a)[0]), dict(NO_BOOKING)), a)
 
 
 async def slots_for(lead: dict | None, date_s: str) -> dict:
@@ -1012,7 +1050,7 @@ async def _book_request(request: Request, kind: str):
         return _done(kind, source, lead, dict(NO_BOOKING), a)
     date_s, time_s = _when_args(a)
     async with _book_lock:
-        res = await book_for(lead, date_s, time_s, source)
+        res = await guarded("booking", book_for(lead, date_s, time_s, source), dict(NO_BOOKING))
     return _done(kind, source, lead, res, a)
 
 
@@ -1036,7 +1074,7 @@ async def ghl_cancel(request: Request):
     if not lead or not booking_enabled():
         return _done("cancel", source, lead, dict(NO_BOOKING), a)
     async with _book_lock:
-        res = await cancel_for(lead)
+        res = await guarded("cancelling", cancel_for(lead), dict(NO_BOOKING))
     return _done("cancel", source, lead, res, a)
 
 
@@ -1181,7 +1219,7 @@ async def _sync_loop() -> None:
         try:
             await sync_bookings()
         except Exception as e:                              # never let the loop die
-            print("[booking] sync error:", e)
+            record_error("reading the calendar for chat bookings", e)
 
 
 @app.on_event("startup")
@@ -1248,13 +1286,14 @@ async def update_chat_bot(data: dict, visitor: dict) -> str:
             save_state()
             return "error: " + problem
         cfg = await booking_config() if booking_enabled() else {"calendarId": ""}
-        channels = {CHAT_CHANNELS.get(str(c).lower(), c) for c in (bot.get("channels") or [])} | {"Live_Chat", "WebChat"}
+        channels = {CHAT_CHANNELS.get(str(c).lower(), str(c)) for c in (bot.get("channels") or []) if isinstance(c, str)} | {"Live_Chat", "WebChat"}
         res, limits = {}, [st.get("limit") or 0, 4000, 2800, 1900, 1200]     # 0 = everything; GHL may allow less
         while limits:
             limit = limits.pop(0)
             body = {**build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit),
                     "businessName": data["company_name"][:80], "mode": "auto-pilot", "channels": sorted(channels),
-                    "autoPilotMaxMessages": max(int(bot.get("autoPilotMaxMessages") or 0), 50)}
+                    "autoPilotMaxMessages": max(int(bot.get("autoPilotMaxMessages") or 0)
+                                                if str(bot.get("autoPilotMaxMessages") or "0").isdigit() else 0, 50)}
             if not bot:                                     # no bot in this account yet: make one for the demo
                 body.update(name=CHAT_BOT_NAME, isPrimary=True, waitTime=2, waitTimeUnit="seconds", sleepEnabled=False)
             res = await ghl.save_chat_agent(bot.get("id", ""), body)
@@ -1283,6 +1322,7 @@ async def update_chat_bot(data: dict, visitor: dict) -> str:
                 details = {"calendarId": cfg["calendarId"], "onlySendLink": False, "triggerWorkflow": False,
                            "sleepAfterBooking": False, "transferBot": False, "rescheduleEnabled": True, "cancelEnabled": True}
                 d = (have or {}).get("details") or {}
+                d = d if isinstance(d, dict) else {}
                 if not have:
                     made = await ghl.save_chat_action(res["id"], {"type": "appointmentBooking", "name": "Book appointment", "details": details})
                     st["action"] = made.get("id") or ""
@@ -1476,8 +1516,8 @@ async def booking_check(base: str) -> dict:
     debug_actions, mode = {}, ""
     for i, line in enumerate(LINES, 1):
         tag = f"Line {i}: " if len(LINES) > 1 else ""
-        mode = await ensure_booking_actions(base, line["agent"], force=True)
-        on_agent = await ghl.agent_actions(line["agent"])
+        mode = await guarded("check: booking actions on the agent", ensure_booking_actions(base, line["agent"], force=True), "")
+        on_agent = await guarded("check: reading the voice agent", ghl.agent_actions(line["agent"]), None)
         st = _astate(line["agent"])
         step(tag + "the server can read the voice agent", on_agent is not None,
              _ghl_problem("agent") or f"agent {line['agent']} / widget {line['widget']} | {len(on_agent or [])} action(s) on the agent")
@@ -1497,12 +1537,13 @@ async def booking_check(base: str) -> dict:
         + f" | waiting: {len(WAITING)} | a visitor keeps a line up to {LINE_HOLD // 60} min when others are waiting")
 
     _bcfg["ts"] = 0.0
-    cfg = await booking_config()
+    cfg = await guarded("check: calendar and pipeline", booking_config(), {
+        "calendarId": "", "calendarName": "", "slotMins": 30, "pipelineId": "", "pipelineName": "", "stageId": "", "stageName": ""})
     step("A calendar was found", bool(cfg["calendarId"]),
          cfg["calendarName"] or cfg["calendarId"] or _ghl_problem("calendar") or "No active calendar in this GHL account. Create one in Calendars.")
     if cfg["calendarId"]:
         tz = get_tz("")
-        by_day = await open_slots(cfg["calendarId"], tz, datetime.now(tz), 7)
+        by_day = await guarded("check: free times", open_slots(cfg["calendarId"], tz, datetime.now(tz), 7), None)
         n = sum(len(v) for v in (by_day or {}).values())
         step("The calendar has free times in the next 7 days", bool(n),
              f"{n} free times ({tz_name(tz)})" if n else _ghl_problem("calendar") or
@@ -1516,14 +1557,15 @@ async def booking_check(base: str) -> dict:
 
     # text chat in the widget (GHL Conversation AI bot)
     if chat_enabled():
-        bot, problem = await chat_bot(force=True)
+        bot, problem = await guarded("check: chat bot", chat_bot(force=True),
+                                     ({}, "The server hit an error here - see 'Unexpected server errors' below."))
         cst = STATE.get("chat", {})
         if problem:
             step("Text chat: the chat bot can be reached", False, _ghl_problem("chat") or problem)
         elif not bot:
             step("Text chat: a chat bot exists", None, "None yet. One is created the next time the form is submitted.")
         else:
-            chans = ", ".join(bot.get("channels") or []) or "-"
+            chans = ", ".join(str(c) for c in (bot.get("channels") or [])) or "-"
             step("Text chat: the chat bot is on and answers by itself",
                  str(bot.get("mode", "")).lower().replace("_", "-") == "auto-pilot" and not cst.get("error"),
                  cst.get("error") or f"{bot.get('name')} | mode: {bot.get('mode')} | channels: {chans}"
@@ -1532,7 +1574,7 @@ async def booking_check(base: str) -> dict:
             if cst.get("updated"):
                 step("Text chat: the chat bot can book, change and cancel appointments", bool(cst.get("action")) and not cst.get("actionError"),
                      cst.get("actionError") or ("Appointment booking is switched on" if cst.get("action") else "Checked on the next form submission"))
-        await sync_bookings()
+        await guarded("check: reading the calendar for chat bookings", sync_bookings(), None)
         seen = ghl.ERRORS.get("calendar-events") or ghl.ERRORS.get("contact-appointments")
         step("Appointments made in the chat are noticed (opportunity + note)", None if seen and not EXACT_TIMES else not seen,
              (_ghl_problem("calendar-events") or _ghl_problem("contact-appointments")) if seen else
@@ -1548,7 +1590,12 @@ async def booking_check(base: str) -> dict:
               "result": e["status"], "detail": e["detail"]} for e in reversed(EVENTS[-25:])]
     debug = {"voiceActions": debug_actions, "mode": mode,
              "chat": {k: v for k, v in STATE.get("chat", {}).items() if k in ("id", "bot", "error", "actionError", "backupAt", "updated")}}
-    return {"ok": all(x["ok"] is not False for x in steps), "steps": steps, "calls": calls, "debug": debug}
+    return {"ok": all(x["ok"] is not False for x in steps), "steps": steps, "calls": calls, "debug": debug, "errors": _recent_errors()}
+
+
+def _recent_errors() -> list[dict]:
+    return [{"time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(e["ts"])), "where": e["where"], "error": e["error"], "at": e["at"]}
+            for e in reversed(SERVER_ERRORS[-12:])]
 
 
 @app.get("/api/booking/check")
@@ -1558,7 +1605,14 @@ async def booking_check_page(request: Request, loc: str = "", format: str = ""):
     if not loc or loc != os.getenv("GHL_LOCATION_ID", ""):
         raise HTTPException(404, "Not found")
     if not _check_cache["v"] or time.time() - _check_cache["ts"] > 20:
-        _check_cache.update(v=await booking_check(public_base(request)), ts=time.time())
+        try:
+            result = await booking_check(public_base(request))
+        except Exception as e:                               # the check itself broke: still show what we know
+            record_error("the check page", e)
+            result = {"ok": False, "calls": [], "debug": {}, "errors": _recent_errors(), "steps": [
+                {"name": "The check could not finish", "ok": False, "detail": f"{type(e).__name__}: {e}"[:300]}]}
+        result.setdefault("errors", _recent_errors())
+        _check_cache.update(v=result, ts=time.time())
     r = _check_cache["v"]
     if format == "json":
         return r
@@ -1567,13 +1621,17 @@ async def booking_check_page(request: Request, loc: str = "", format: str = ""):
                    f'<small>{escape(x["detail"])}</small></span></li>' for x in r["steps"])
     calls = "".join(f'<tr><td>{escape(c["time"])}</td><td>{escape(c["from"])}</td><td>{escape(c["what"])}</td>'
                     f'<td>{escape(c["result"])}</td><td>{escape(c["detail"])}</td></tr>' for c in r["calls"])
+    errs = "".join(f'<tr><td>{escape(x["time"])}</td><td>{escape(x["where"])}</td><td>{escape(x["error"])}</td><td>{escape(x["at"])}</td></tr>'
+                   for x in r.get("errors") or [])
+    errs = (f"<h2>Unexpected server errors (newest first)</h2><table><tr><th>Time</th><th>Where</th><th>Error</th><th>Code location</th></tr>{errs}</table>"
+            if errs else "")
     return HTMLResponse(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Booking check</title><style>body{{font:15px/1.5 system-ui,sans-serif;max-width:860px;margin:24px auto;padding:0 16px;color:#0F172A}}
 ul{{list-style:none;padding:0}}li{{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid #E2E8F0}}li b{{font-size:18px;width:20px}}
 small{{display:block;color:#64748B}}table{{border-collapse:collapse;width:100%;font-size:13px}}td,th{{text-align:left;padding:6px 8px;border-bottom:1px solid #E2E8F0;vertical-align:top}}
 h1{{font-size:22px}}h2{{font-size:17px;margin-top:28px}}</style>
 <h1>Appointment booking check: {'everything needed is in place' if r['ok'] else 'something needs fixing'}</h1>
-<ul>{rows}</ul><h2>Recent booking requests (newest first)</h2>
+<ul>{rows}</ul>{errs}<h2>Recent booking requests (newest first)</h2>
 <table><tr><th>Time</th><th>From</th><th>What</th><th>Result</th><th>Detail</th></tr>{calls or '<tr><td colspan=5>None yet</td></tr>'}</table>""",
                         headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 

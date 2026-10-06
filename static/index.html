@@ -621,7 +621,8 @@ $("form").addEventListener("submit", async e => {
     let r, data;
     for (;;) {                                               // "busy" = every line is in use: keep our place and ask again
       r = await fetch(API + "/api/train", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
-      data = await r.json();
+      try { data = JSON.parse(await r.text()); }             // a server error page is not JSON: show a plain message
+      catch (e) { throw new Error("Something went wrong on our side. Please try again in a minute."); }
       if (!r.ok) throw new Error(data.detail || "Something went wrong, please try again.");
       if (data.status !== "busy") break;
       const mins = Math.max(1, Math.ceil((data.waitSeconds || 0) / 60));

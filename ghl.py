@@ -120,14 +120,14 @@ async def _call(method: str, path: str, version: str = "2021-07-28", **kw) -> tu
         else:
             ERRORS.pop(_area(path), None)
         return r.status_code, j
-    except httpx.HTTPError as e:
-        print(f"[ghl] {method} {path} error: {e}")
-        ERRORS[_area(path)] = {"status": 0, "message": f"could not reach GHL: {e}", "ts": time.time()}
+    except Exception as e:                                   # network trouble or an answer we cannot read
+        print(f"[ghl] {method} {path} error: {type(e).__name__}: {e}")
+        ERRORS[_area(path)] = {"status": 0, "message": f"could not reach GHL: {type(e).__name__}: {e}"[:300], "ts": time.time()}
         return 0, {"message": str(e)}
 
 
-def _err(status: int, j: dict) -> str:
-    m = j.get("message") or j.get("error") or j
+def _err(status: int, j) -> str:
+    m = (j.get("message") or j.get("error") or j) if isinstance(j, dict) else j
     return f"{status}: {m if isinstance(m, str) else '; '.join(map(str, m)) if isinstance(m, list) else m}"[:300]
 
 
@@ -181,7 +181,7 @@ async def contact_appointments(contact_id: str) -> list[dict] | None:
     """GET /contacts/{id}/appointments (scope: contacts.readonly) - finds an appointment booked in an earlier visit
     or by the chat bot. None = could not ask."""
     s, j = await _call("GET", f"/contacts/{contact_id}/appointments")
-    return (j.get("events") or []) if s == 200 else None
+    return [e for e in (j.get("events") or []) if isinstance(e, dict)] if s == 200 else None
 
 
 async def calendar_events(calendar_id: str, start_ms: int, end_ms: int) -> list[dict] | None:
@@ -190,7 +190,7 @@ async def calendar_events(calendar_id: str, start_ms: int, end_ms: int) -> list[
     s, j = await _call("GET", "/calendars/events", CAL_VERSION,
                        params={"locationId": os.environ["GHL_LOCATION_ID"], "calendarId": calendar_id,
                                "startTime": start_ms, "endTime": end_ms})
-    return (j.get("events") or []) if s == 200 else None
+    return [e for e in (j.get("events") or []) if isinstance(e, dict)] if s == 200 else None
 
 
 async def list_pipelines() -> list[dict]:
@@ -238,7 +238,9 @@ async def agent_actions(agent_id: str = "") -> list[dict] | None:
         if not isinstance(a, dict):
             continue
         params = a.get("actionParameters") or a.get("details") or {}
+        params = params if isinstance(params, dict) else {}
         api = params.get("apiDetails") or a.get("apiDetails") or {}
+        api = api if isinstance(api, dict) else {}
         out.append({"id": a.get("id") or a.get("_id") or a.get("actionId"), "name": a.get("name") or a.get("actionName"),
                     "type": a.get("actionType") or a.get("type"), "url": api.get("url"), "method": api.get("method"),
                     "keys": sorted(a), "paramKeys": sorted(params) if isinstance(params, dict) else []})
@@ -279,12 +281,22 @@ CHAT_VERSION = "2021-04-15"
 async def chat_agents() -> list[dict] | None:
     """GET /conversation-ai/agents/search (scope: conversation-ai.readonly). None = could not ask."""
     s, j = await _call("GET", "/conversation-ai/agents/search", CHAT_VERSION, params={"limit": 50})
-    return (j.get("agents") or []) if s == 200 else None
+    if s != 200:
+        return None
+    found = j.get("agents") or j.get("employees") or j.get("data") or []
+    found = found.get("agents") or [] if isinstance(found, dict) else found
+    return [{**a, "id": a.get("id") or a.get("_id") or a.get("agentId") or ""} for a in found
+            if isinstance(a, dict) and (a.get("id") or a.get("_id") or a.get("agentId"))]
 
 
 async def chat_agent(agent_id: str) -> dict | None:
     s, j = await _call("GET", f"/conversation-ai/agents/{agent_id}", CHAT_VERSION)
-    return j if s == 200 else None
+    if s != 200:
+        return None
+    for key in ("agent", "employee", "data"):               # sometimes wrapped
+        if isinstance(j.get(key), dict):
+            return j[key]
+    return j
 
 
 async def save_chat_agent(agent_id: str, body: dict) -> dict:
@@ -295,18 +307,37 @@ async def save_chat_agent(agent_id: str, body: dict) -> dict:
     else:
         s, j = await _call("POST", "/conversation-ai/agents", CHAT_VERSION, json=body)
     if s in (200, 201):
-        return {"id": j.get("id") or j.get("_id") or (j.get("agent") or {}).get("id") or agent_id}
+        inner = next((j[k] for k in ("agent", "employee", "data") if isinstance(j.get(k), dict)), {})
+        return {"id": j.get("id") or j.get("_id") or inner.get("id") or inner.get("_id") or agent_id or "created"}
     return {"error": _err(s, j), "status": s}
 
 
 async def chat_actions(agent_id: str) -> list[dict] | None:
+    """The bot's actions as a flat list, whatever shape GHL groups them in. None = could not ask."""
     s, j = await _call("GET", f"/conversation-ai/agents/{agent_id}/actions/list", CHAT_VERSION)
-    return (j.get("data") or []) if s == 200 else None
+    if s != 200:
+        return None
+    out: list[dict] = []
+
+    def take(x, kind=""):
+        if isinstance(x, list):
+            for y in x:
+                take(y, kind)
+        elif isinstance(x, dict):
+            if x.get("type") or x.get("details") is not None:           # an action
+                out.append({**x, "id": x.get("id") or x.get("_id") or "", "type": x.get("type") or kind})
+            else:                                                        # a group: {"appointmentBooking": [...]} / {"actions": [...]}
+                for k, v in x.items():
+                    take(v, k if k not in ("actions", "data", "items") else kind)
+
+    take(j.get("data") if "data" in j else j.get("actions"))
+    return out
 
 
 async def save_chat_action(agent_id: str, body: dict, action_id: str = "") -> dict:
     path = f"/conversation-ai/agents/{agent_id}/actions" + (f"/{action_id}" if action_id else "")
     s, j = await _call("PUT" if action_id else "POST", path, CHAT_VERSION, json=body)
     if s in (200, 201):
-        return {"id": (j.get("data") or {}).get("id") or j.get("id") or action_id or "created"}
+        data = j.get("data") if isinstance(j.get("data"), dict) else {}
+        return {"id": data.get("id") or data.get("_id") or j.get("id") or action_id or "created"}
     return {"error": _err(s, j), "status": s}

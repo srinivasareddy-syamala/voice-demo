@@ -77,6 +77,21 @@ Setup:
    "appointment" or "booked". To choose exactly, set `GHL_CALENDAR_ID`, `GHL_PIPELINE_ID`, `GHL_PIPELINE_STAGE_ID`.
 3. Restart, submit the form once, then open the check page.
 
+## Text chat in the widget
+"Chat via Live Chat" and "Chat via SMS/Email" are answered by GHL's **Conversation AI bot**, a different bot from the
+Voice AI agent. On every form submission the app also writes the visitor's company into that bot, sets it to
+**auto-pilot** on Live Chat + Web Chat and switches on its **appointment booking** action (book, reschedule, cancel)
+on the same calendar. It uses `GHL_CHAT_AGENT_ID`, else the account's primary bot, else it creates one.
+The bot's earlier settings are saved once in `.demo_state.json` (`chat.backup`). Turn this off with `CHAT_AGENT_ENABLED=0`.
+
+Note: this bot answers **every** web chat in the sub-account, as the latest visitor's company.
+
+The chat bot books straight into GHL, so the server reads the calendar every 40 seconds for recent visitors: a new
+appointment gets its opportunity and note, and the result page shows it. This needs the visitor to use the same
+email or phone in the chat as in the form.
+
+Extra token scopes: `conversation-ai.readonly`, `conversation-ai.write`, `calendars/events.readonly`.
+
 ## Talk button behaviour
 1. Asks for microphone permission inside the tap (needed on iPhone Safari / Chrome mobile).
 2. Opens the GHL widget (`window.leadConnector.chatWidget.openWidget()`).

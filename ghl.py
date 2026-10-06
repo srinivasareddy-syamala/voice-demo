@@ -91,7 +91,8 @@ async def add_note(contact_id: str, text: str) -> bool:
 CAL_VERSION = "2021-04-15"
 # Last failure per kind of request (cleared when that kind works again). Shown on the booking check page.
 ERRORS: dict[str, dict] = {}
-AREAS = (("/voice-ai/actions", "actions"), ("/voice-ai/agents", "agent"), ("/calendars/events", "appointments"),
+AREAS = (("/conversation-ai", "chat"), ("/voice-ai/actions", "actions"), ("/voice-ai/agents", "agent"),
+         ("/calendars/events/appointments", "appointments"), ("/calendars/events", "calendar-events"),
          ("/calendars", "calendar"), ("/opportunities/pipelines", "pipelines"), ("/opportunities", "opportunities"),
          ("/contacts", "contacts"))
 
@@ -175,10 +176,20 @@ async def cancel_appointment(event_id: str, calendar_id: str) -> dict:
     return {"id": event_id} if s == 200 else {"error": _err(s, j), "status": s}
 
 
-async def contact_appointments(contact_id: str) -> list[dict]:
-    """GET /contacts/{id}/appointments (scope: contacts.readonly) - finds an appointment booked in an earlier visit."""
+async def contact_appointments(contact_id: str) -> list[dict] | None:
+    """GET /contacts/{id}/appointments (scope: contacts.readonly) - finds an appointment booked in an earlier visit
+    or by the chat bot. None = could not ask."""
     s, j = await _call("GET", f"/contacts/{contact_id}/appointments")
-    return j.get("events") or [] if s == 200 else []
+    return (j.get("events") or []) if s == 200 else None
+
+
+async def calendar_events(calendar_id: str, start_ms: int, end_ms: int) -> list[dict] | None:
+    """GET /calendars/events (scope: calendars/events.readonly): every appointment in the calendar in that period,
+    with exact times. Used to notice appointments the chat bot booked, moved or cancelled. None = could not ask."""
+    s, j = await _call("GET", "/calendars/events", CAL_VERSION,
+                       params={"locationId": os.environ["GHL_LOCATION_ID"], "calendarId": calendar_id,
+                               "startTime": start_ms, "endTime": end_ms})
+    return (j.get("events") or []) if s == 200 else None
 
 
 async def list_pipelines() -> list[dict]:
@@ -221,37 +232,80 @@ async def agent_actions() -> list[dict] | None:
                        params={"locationId": os.environ["GHL_LOCATION_ID"]})
     if s != 200:
         return None
-    return [{"id": a.get("id") or a.get("_id"), "name": a.get("name"), "type": a.get("actionType"),
-             "url": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("url"),
-             "method": ((a.get("actionParameters") or {}).get("apiDetails") or {}).get("method"),
-             "say": (a.get("actionParameters") or {}).get("triggerMessage")}
-            for a in (j.get("actions") or []) if isinstance(a, dict)]
+    out = []
+    for a in (j.get("actions") or []):
+        if not isinstance(a, dict):
+            continue
+        params = a.get("actionParameters") or a.get("details") or {}
+        api = params.get("apiDetails") or a.get("apiDetails") or {}
+        out.append({"id": a.get("id") or a.get("_id") or a.get("actionId"), "name": a.get("name") or a.get("actionName"),
+                    "type": a.get("actionType") or a.get("type"), "url": api.get("url"), "method": api.get("method"),
+                    "keys": sorted(a), "paramKeys": sorted(params) if isinstance(params, dict) else []})
+    return out
 
 
-async def save_custom_action(name: str, params: dict, action_id: str = "") -> dict:
-    """POST /voice-ai/actions or PUT /voice-ai/actions/{id} (scope: voice-ai-agent-goals.write).
-    A custom action lets the voice agent call our server during a call. -> {"id"} or {"error"}."""
+async def delete_action(action_id: str) -> bool:
+    """DELETE /voice-ai/actions/{id} (scope: voice-ai-agent-goals.write)"""
+    s, _ = await _call("DELETE", f"/voice-ai/actions/{action_id}", _voice_version(),
+                       params={"locationId": os.environ["GHL_LOCATION_ID"], "agentId": os.environ["GHL_AGENT_ID"]})
+    return s in (200, 204)
+
+
+async def save_custom_action(name: str, params: dict) -> dict:
+    """POST /voice-ai/actions (scope: voice-ai-agent-goals.write). A custom action lets the voice agent call our
+    server during a call. Create only: GHL's update call has answered "Maximum call stack size exceeded", so an
+    action that must change is deleted and created again. -> {"id"} or {"error", "status"}."""
     body = {"agentId": os.environ["GHL_AGENT_ID"], "locationId": os.environ["GHL_LOCATION_ID"],
             "actionType": "CUSTOM_ACTION", "name": name, "actionParameters": params}
-    method, path = ("PUT", f"/voice-ai/actions/{action_id}") if action_id else ("POST", "/voice-ai/actions")
     ver = _voice_version()
-    s, j = await _call(method, path, ver, json=body)
+    s, j = await _call("POST", "/voice-ai/actions", ver, json=body)
     if s in (400, 422) and "version" in str(j).lower() and ver != CAL_VERSION:
         ver = CAL_VERSION
-        s, j = await _call(method, path, ver, json=body)
-    if s == 404 and action_id:              # it was deleted in GHL -> make it again
-        method, path = "POST", "/voice-ai/actions"
-        s, j = await _call(method, path, ver, json=body)
-    if s == 400 and action_id and "same name" in str(j).lower():      # GHL refuses to update in place: replace it
-        d, _ = await _call("DELETE", f"/voice-ai/actions/{action_id}", ver,
-                           params={"locationId": os.environ["GHL_LOCATION_ID"], "agentId": os.environ["GHL_AGENT_ID"]})
-        if d in (200, 204):
-            method, path = "POST", "/voice-ai/actions"
-            s, j = await _call(method, path, ver, json=body)
+        s, j = await _call("POST", "/voice-ai/actions", ver, json=body)
     if s >= 400 and "selectedPaths" in str(j):   # older field name used in GHL's own examples
         p2 = dict(params)
         p2["responsePathsToExtract"] = p2.pop("selectedPaths", [])
-        s, j = await _call(method, path, ver, json={**body, "actionParameters": p2})
+        s, j = await _call("POST", "/voice-ai/actions", ver, json={**body, "actionParameters": p2})
     if s in (200, 201):
-        return {"id": j.get("id") or j.get("_id") or (j.get("action") or {}).get("id") or action_id}
+        return {"id": j.get("id") or j.get("_id") or (j.get("action") or {}).get("id") or "created"}
+    return {"error": _err(s, j), "status": s}
+
+
+# ---------------------------------------------------------------- chat bot (GHL Conversation AI) - the widget's text chat
+CHAT_VERSION = "2021-04-15"
+
+
+async def chat_agents() -> list[dict] | None:
+    """GET /conversation-ai/agents/search (scope: conversation-ai.readonly). None = could not ask."""
+    s, j = await _call("GET", "/conversation-ai/agents/search", CHAT_VERSION, params={"limit": 50})
+    return (j.get("agents") or []) if s == 200 else None
+
+
+async def chat_agent(agent_id: str) -> dict | None:
+    s, j = await _call("GET", f"/conversation-ai/agents/{agent_id}", CHAT_VERSION)
+    return j if s == 200 else None
+
+
+async def save_chat_agent(agent_id: str, body: dict) -> dict:
+    """PUT /conversation-ai/agents/{id}, or POST /conversation-ai/agents when agent_id is empty
+    (scope: conversation-ai.write). -> {"id"} or {"error", "status"}."""
+    if agent_id:
+        s, j = await _call("PUT", f"/conversation-ai/agents/{agent_id}", CHAT_VERSION, json=body)
+    else:
+        s, j = await _call("POST", "/conversation-ai/agents", CHAT_VERSION, json=body)
+    if s in (200, 201):
+        return {"id": j.get("id") or j.get("_id") or (j.get("agent") or {}).get("id") or agent_id}
+    return {"error": _err(s, j), "status": s}
+
+
+async def chat_actions(agent_id: str) -> list[dict] | None:
+    s, j = await _call("GET", f"/conversation-ai/agents/{agent_id}/actions/list", CHAT_VERSION)
+    return (j.get("data") or []) if s == 200 else None
+
+
+async def save_chat_action(agent_id: str, body: dict, action_id: str = "") -> dict:
+    path = f"/conversation-ai/agents/{agent_id}/actions" + (f"/{action_id}" if action_id else "")
+    s, j = await _call("PUT" if action_id else "POST", path, CHAT_VERSION, json=body)
+    if s in (200, 201):
+        return {"id": (j.get("data") or {}).get("id") or j.get("id") or action_id or "created"}
     return {"error": _err(s, j), "status": s}

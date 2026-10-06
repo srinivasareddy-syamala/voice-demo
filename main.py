@@ -22,7 +22,7 @@ load_dotenv(".env.example")   # otherwise use the values in .env.example
 
 import ghl  # noqa: E402
 from persona import (ACTION_BOOK, ACTION_CANCEL, ACTION_CHANGE, ACTION_SLOTS,  # noqa: E402
-                     build_agent_prompt, build_welcome)
+                     build_agent_prompt, build_chat_agent, build_welcome)
 from scraper import mobile_preview, scrape_company  # noqa: E402
 
 # The chat + call widget shown inside the phone preview. Fixed in code on purpose: an old
@@ -352,7 +352,7 @@ async def train(req: TrainRequest, request: Request):
     can_book = await actions_task                 # "reply", "send" or ""
     first = await contact_task
     lead["contactId"] = (first or {}).get("id") or "" if isinstance(first, dict) else ""
-    had = await current_booking(lead) if can_book and lead["contactId"] else None   # booked in an earlier visit?
+    had = await current_booking(lead) if booking_enabled() and lead["contactId"] else None   # booked in an earlier visit?
     prompt = build_agent_prompt(data, visitor, {
         "ref": lead["ref"], "tz": lead["tz"], "now": datetime.now(get_tz(lead["tz"])),
         "replies": can_book == "reply", "existing": (had or {}).get("when", ""),
@@ -383,8 +383,8 @@ async def train(req: TrainRequest, request: Request):
             f"Phones: {', '.join(data['phones']) or '-'} | Emails: {', '.join(data['emails']) or '-'}\n"
             f"Pages read: {len(data['pages_scraped'])}")
 
-    agent_status, contact, preview = await asyncio.gather(
-        update_agent(), save_contact(), mobile_preview(data["website"]))
+    agent_status, contact, preview, chat_status = await asyncio.gather(
+        update_agent(), save_contact(), mobile_preview(data["website"]), update_chat_bot(data, visitor))
     lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
     save_state()
     # brand colour: what the page really renders, else what its stylesheets say
@@ -406,6 +406,7 @@ async def train(req: TrainRequest, request: Request):
         "theme": theme,
         "bookingRef": lead["ref"] if booking_enabled() else "",
         "agentCanBook": bool(can_book),
+        "chatStatus": chat_status,
         "booking": booking_status(lead["ref"]),
     }
 
@@ -435,8 +436,8 @@ REF_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"                # no 0/O/1/I - eas
 def save_state() -> None:
     try:
         keep = {r: {k: v for k, v in l.items() if k not in ("email", "phone")} for r, l in LEADS.items()}
-        STATE_FILE.write_text(json.dumps({"actions": STATE.get("actions", {}), "leads": keep, "events": EVENTS[-60:]}),
-                              encoding="utf-8")
+        STATE_FILE.write_text(json.dumps({"actions": STATE.get("actions", {}), "chat": STATE.get("chat", {}), "leads": keep,
+                                          "events": EVENTS[-60:]}), encoding="utf-8")
     except OSError as e:
         print("[booking] could not save state:", e)
 
@@ -533,8 +534,10 @@ def _action_params(kind: str, base: str, method: str = "GET") -> dict:
 
 
 async def ensure_booking_actions(base: str, force: bool = False) -> str:
-    """Create (once) or repair the booking actions on the GHL voice agent.
-    Returns "reply" (agent books and hears the answer), "send" (agent can only send the request) or "" (cannot book)."""
+    """Make sure the booking actions are on the GHL voice agent.
+    Returns "reply" (agent books and hears the answer), "send" (agent can only send the request) or "" (cannot book).
+    An action that is already on the agent is left alone - GHL's "update action" call fails - unless it points at
+    another address, in which case it is deleted and created again."""
     if not base or not booking_enabled():
         return ""
     async with _actions_lock:
@@ -547,25 +550,35 @@ async def ensure_booking_actions(base: str, force: bool = False) -> str:
             if now - st.get("failed", 0) < 300:       # e.g. token has no permission: don't retry on every visitor
                 return ""
         existing = await ghl.agent_actions()          # None = could not read the agent
-        methods, errors = {}, []
+        methods, errors, notes = {}, [], []
         for kind, name in ACTION_NAMES.items():
             url = f"{base}/api/ghl/{kind}"
             found = next((x for x in existing or [] if x.get("name") == name), None)
-            aid = (found or {}).get("id") or ("" if existing is not None else st.get(kind, ""))
-            if found and found.get("url") == url and found.get("say") in (None, ACTION_TEXT[kind][1]):
-                st[kind], methods[kind] = aid, (found.get("method") or "GET").upper()
+            if existing is None and st.get(kind):     # cannot read the agent: trust what was created earlier
+                methods[kind] = "GET"
                 continue
-            res = await ghl.save_custom_action(name, _action_params(kind, base, "GET"), aid)
+            if found:
+                st[kind], methods[kind] = found.get("id") or st.get(kind) or "on-agent", (found.get("method") or "GET").upper()
+                elsewhere = bool(found.get("url")) and found["url"] != url
+                if not elsewhere:
+                    continue
+                if not found.get("id") or now - st.get("replaced", {}).get(kind, 0) < 6 * 3600:
+                    notes.append(f"'{name}' points at {found['url']} (expected {url})")
+                    continue
+                st.setdefault("replaced", {})[kind] = now
+                if not await ghl.delete_action(found["id"]):
+                    notes.append(f"'{name}' points at {found['url']} and could not be replaced")
+                    continue
+            res = await ghl.save_custom_action(name, _action_params(kind, base, "GET"))
             method = "GET"
-            if not res.get("id") and res.get("status") in (400, 422):     # this account wants POST: send-only
-                res = await ghl.save_custom_action(name, _action_params(kind, base, "POST"), aid)
+            if not res.get("id") and res.get("status") in (400, 422) and "same name" not in (res.get("error") or "").lower():
+                res = await ghl.save_custom_action(name, _action_params(kind, base, "POST"))   # this account wants POST: send-only
                 method = "POST"
             if res.get("id"):
                 st[kind], methods[kind] = res["id"], method
                 print(f"[booking] agent action '{name}' ready ({method}) -> {url}")
-            elif found and found.get("url") == url and aid:      # only its wording could not be refreshed: it still works
-                st[kind], methods[kind] = aid, (found.get("method") or "GET").upper()
-                print(f"[booking] kept the existing '{name}' action (GHL refused the update: {res.get('error')})")
+            elif "same name" in (res.get("error") or "").lower():       # it is there, we just could not see it
+                st[kind], methods[kind] = st.get(kind) or "on-agent", "GET"
             else:
                 st.pop(kind, None)
                 errors.append(f"{name}: {res.get('error')}")
@@ -574,8 +587,8 @@ async def ensure_booking_actions(base: str, force: bool = False) -> str:
         ok = not errors
         mode = "reply" if all(m == "GET" for m in methods.values()) else "send"
         st.pop("failed", None) if ok else st.pop("checked", None)
-        st.update({"base": base, "checked": now, "mode": mode, "error": ""} if ok
-                  else {"failed": now, "error": "; ".join(errors)[:500]})
+        st.update({"base": base, "checked": now, "mode": mode, "error": "", "notes": notes} if ok
+                  else {"failed": now, "error": "; ".join(errors)[:500], "notes": notes})
         if ok:
             ghl.ERRORS.pop("actions", None)
         save_state()
@@ -601,7 +614,8 @@ async def booking_config() -> dict:
         or (pipes[0] if pipes else None))
     stages = (pipe or {}).get("stages") or []
     stage = next((x for x in stages if x.get("id") == want_s), None) if want_s else (
-        next((x for x in stages if re.search(r"appoint|book|demo|meeting|call", x.get("name") or "", re.I)), None)
+        next((x for x in stages if re.search(r"appoint|book|schedul", x.get("name") or "", re.I)), None)
+        or next((x for x in stages if re.search(r"meeting|call|demo", x.get("name") or "", re.I)), None)
         or (stages[0] if stages else None))
     v = {"calendarId": (cal or {}).get("id") or want, "calendarName": (cal or {}).get("name") or "", "slotMins": mins,
          "pipelineId": (pipe or {}).get("id") or want_p, "pipelineName": (pipe or {}).get("name") or "",
@@ -893,6 +907,52 @@ def _parse_when(value, tz) -> datetime | None:
     return dt.astimezone(tz) if dt.tzinfo else dt.replace(tzinfo=tz)
 
 
+EXACT_TIMES = True      # False when appointment times had to be read without their timezone (see ghl_appointments)
+
+
+def _event_state(ev: dict) -> str:
+    return (ev.get("appointmentStatus") or ev.get("appoinmentStatus") or ev.get("status") or "").lower()
+
+
+async def ghl_appointments(contact_ids: set[str], tz) -> dict[str, list[tuple[datetime, dict]]] | None:
+    """What GHL's calendar holds for these contacts (future, in our calendar), cancelled ones included.
+    One calendar read for everybody; if the token may not read the calendar, one read per contact.
+    None = GHL could not be asked."""
+    global EXACT_TIMES
+    cfg = await booking_config()
+    if not cfg["calendarId"] or not contact_ids:
+        return None
+    now = datetime.now(tz)
+    EXACT_TIMES = True
+    events = await ghl.calendar_events(cfg["calendarId"], int((now - timedelta(hours=1)).timestamp() * 1000),
+                                       int((now + timedelta(days=62)).timestamp() * 1000))
+    if events is None:                                  # no calendars/events.readonly: ask per contact instead
+        events, asked = [], 0
+        for cid in list(contact_ids)[:8]:
+            mine = await ghl.contact_appointments(cid)
+            if mine is not None:
+                asked += 1
+                events += [{**e, "contactId": cid} for e in mine]
+        if not asked:
+            return None
+        zone = get_tz("")                               # these times come without a timezone: assume the account's own
+        EXACT_TIMES = False
+    else:
+        zone = tz
+    out: dict[str, list] = {c: [] for c in contact_ids}
+    for ev in events:
+        when = _parse_when(ev.get("startTime", ""), zone)
+        if (when and when > now and ev.get("id") and ev.get("contactId") in out and not ev.get("deleted")
+                and ev.get("calendarId", cfg["calendarId"]) == cfg["calendarId"]):
+            out[ev["contactId"]].append((when.astimezone(tz), ev))
+    return out
+
+
+def _booking_from(when: datetime, ev: dict) -> dict:
+    return {"start": when.isoformat(), "when": f"{fmt_day(when)} at {fmt_time(when)}", "appointmentId": ev["id"],
+            "calendarId": ev.get("calendarId", ""), "opportunityId": ""}
+
+
 async def current_booking(lead: dict) -> dict | None:
     """The appointment this person has now: booked in this visit, in an earlier visit (same GHL contact),
     or - if this server has no record - whatever GHL shows for the contact in our calendar."""
@@ -915,20 +975,187 @@ async def current_booking(lead: dict) -> dict | None:
     if (lead.get("booking") or {}).get("cancelled") or time.time() - lead.get("lookedUp", 0) < 600:
         return None                                           # we cancelled it ourselves / asked GHL a moment ago
     lead["lookedUp"] = time.time()
-    cfg = await booking_config()
-    upcoming = []
-    for ev in await ghl.contact_appointments(cid):
-        when = _parse_when(ev.get("startTime", ""), tz)
-        if (when and when > now and ev.get("id") and ev.get("calendarId") == cfg["calendarId"]
-                and (ev.get("appointmentStatus") or ev.get("appoinmentStatus") or "").lower() not in ("cancelled", "invalid")
-                and not ev.get("deleted")):
-            upcoming.append((when, ev))
+    found = await ghl_appointments({cid}, tz)
+    upcoming = [(w, ev) for w, ev in (found or {}).get(cid, []) if _event_state(ev) not in ("cancelled", "invalid")]
     if not upcoming:
         return None
-    when, ev = min(upcoming, key=lambda x: x[0])
-    lead["booking"] = {"start": when.isoformat(), "when": f"{fmt_day(when)} at {fmt_time(when)}",
-                       "appointmentId": ev["id"], "calendarId": ev.get("calendarId"), "opportunityId": ""}
+    lead["booking"] = _booking_from(*min(upcoming, key=lambda x: x[0]))
     return lead["booking"]
+
+
+async def sync_bookings() -> None:
+    """The chat bot books, moves and cancels straight in GHL, without telling this server. Look at the calendar
+    for our recent leads: a new appointment gets its opportunity + note, and the page shows what happened."""
+    if not booking_enabled():
+        return
+    now = time.time()
+    recent = [l for l in LEADS.values() if l.get("contactId") and (now - l.get("ts", 0) < 3 * 3600 or now - l.get("seen", 0) < 180)]
+    recent = sorted(recent, key=lambda l: -max(l.get("ts", 0), l.get("seen", 0)))[:15]
+    if not recent:
+        return
+    async with _book_lock:
+        newest: dict[str, dict] = {}
+        for l in recent:                                   # one lead per contact: the latest visit
+            newest.setdefault(l["contactId"], l)
+        tz0 = get_tz("")
+        found = await ghl_appointments(set(newest), tz0)
+        if found is None:
+            return
+        cfg = await booking_config()
+        for cid, lead in newest.items():
+            tz = get_tz(lead.get("tz", ""))
+            mine = [(w.astimezone(tz), ev) for w, ev in found.get(cid, [])]
+            active = [(w, ev) for w, ev in mine if _event_state(ev) not in ("cancelled", "invalid")]
+            b = lead.get("booking") or {}
+            same = next(((w, ev) for w, ev in mine if ev["id"] == b.get("appointmentId")), None)
+            if b.get("appointmentId") and not b.get("cancelled"):
+                if same and _event_state(same[1]) in ("cancelled", "invalid"):
+                    lead["booking"] = {**b, "cancelled": True}
+                    log_event("cancel", "ghl", "cancelled", f"The appointment on {b.get('when')} was cancelled in GHL (chat or team)")
+                    bg(_after_booking(lead, cfg, "APPOINTMENT CANCELLED (in chat or in GHL)", f"Cancelled appointment: {b.get('when', '-')}", False))
+                elif same and EXACT_TIMES and _parse_when(b.get("start", ""), tz) != same[0]:
+                    lead["booking"] = {**b, **_booking_from(*same), "opportunityId": b.get("opportunityId", "")}
+                    log_event("change", "ghl", "rescheduled", f"Moved in GHL (chat or team) to {lead['booking']['when']}")
+                    bg(_after_booking(lead, cfg, "APPOINTMENT CHANGED (in chat or in GHL)",
+                                      f"New time: {lead['booking']['when']} ({tz_name(tz)})\nPrevious time: {b.get('when', '-')}"))
+                if same:
+                    continue
+            fresh = [(w, ev) for w, ev in active if ev["id"] != b.get("appointmentId")]
+            if fresh and (not b or b.get("cancelled") or not same):
+                w, ev = min(fresh, key=lambda x: x[0])
+                lead["booking"] = _booking_from(w, ev)
+                lead.pop("tried", None)
+                added = _parse_when(ev.get("dateAdded", ""), tz)
+                if added and added.timestamp() < lead.get("ts", 0) - 300:      # made before this visit: nothing new to record
+                    continue
+                log_event("book", "ghl", "booked", f"Booked in GHL (chat bot or team): {lead['booking']['when']} ({tz_name(tz)})")
+                bg(_after_booking(lead, cfg, "APPOINTMENT BOOKED (by the chat bot or directly in GHL)",
+                                  f"When: {lead['booking']['when']} ({tz_name(tz)})\nCalendar: {cfg['calendarName'] or cfg['calendarId']}"))
+        save_state()
+
+
+async def _sync_loop() -> None:
+    while True:
+        await asyncio.sleep(40)
+        try:
+            await sync_bookings()
+        except Exception as e:                              # never let the loop die
+            print("[booking] sync error:", e)
+
+
+@app.on_event("startup")
+async def _start_sync() -> None:
+    bg(_sync_loop())
+
+
+# ---------------------------------------------------------------- chat bot (the widget's text chat)
+# "Chat via Live Chat" and "Chat via SMS/Email" are answered by GHL's Conversation AI bot, not by the voice agent.
+# We give that bot the same company knowledge on every form submission and switch on its appointment booking.
+_chat_lock = asyncio.Lock()
+CHAT_CHANNELS = {"live_chat": "Live_Chat", "webchat": "WebChat", "sms": "SMS", "ig": "IG", "fb": "FB", "whatsapp": "WhatsApp"}
+CHAT_BOT_NAME = "AI Receptionist (Pragna AI demo)"
+
+
+def chat_enabled() -> bool:
+    return ghl.configured() and os.getenv("CHAT_AGENT_ENABLED", "1").lower() not in ("0", "false", "no")
+
+
+async def chat_bot(force: bool = False) -> tuple[dict, str]:
+    """Which Conversation AI bot answers the widget's chat: GHL_CHAT_AGENT_ID, else the account's primary bot,
+    else its only bot. -> (the bot as GHL describes it, problem). ({}, "") means: no bot yet, one will be created."""
+    st = STATE.setdefault("chat", {})
+    want = os.getenv("GHL_CHAT_AGENT_ID", "").strip()
+    if not force and st.get("id") and (not want or want == st["id"]) and time.time() - st.get("checked", 0) < 1800:
+        return st.get("bot") or {"id": st["id"]}, ""
+    bots = await ghl.chat_agents()
+    if bots is None:
+        return {}, (ghl.ERRORS.get("chat") or {}).get("message", "GHL did not answer")
+    bot = (next((b for b in bots if b.get("id") == want), None) if want else
+           next((b for b in bots if b.get("id") == st.get("id")), None)
+           or next((b for b in bots if b.get("isPrimary")), None)
+           or next((b for b in bots if b.get("name") == CHAT_BOT_NAME), None)
+           or (bots[0] if len(bots) == 1 else None))
+    if not bot:
+        st.pop("id", None)
+        st["bot"] = {}
+        save_state()
+        if want:
+            return {}, f"GHL_CHAT_AGENT_ID={want} is not a Conversation AI bot in this account"
+        return {}, ("This account has several Conversation AI bots and none is primary. Put the right bot's id in "
+                    "GHL_CHAT_AGENT_ID in .env." if bots else "")
+    if not st.get("backup") and bot.get("name") != CHAT_BOT_NAME:           # keep what was there before the demo used it
+        full = await ghl.chat_agent(bot["id"]) or {}
+        st["backup"] = {k: full.get(k) for k in ("name", "businessName", "mode", "channels", "personality", "goal", "instructions")
+                        if full.get(k) is not None}
+        st["backupAt"] = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    st.update(id=bot["id"], checked=time.time(),
+              bot={k: bot.get(k) for k in ("id", "name", "mode", "channels", "isPrimary", "autoPilotMaxMessages")})
+    save_state()
+    return st["bot"], ""
+
+
+async def update_chat_bot(data: dict, visitor: dict) -> str:
+    """Write this visitor's company into the chat bot and make sure it can book. -> "updated", "off" or "error: ..."."""
+    if not chat_enabled():
+        return "off"
+    async with _chat_lock:
+        st = STATE.setdefault("chat", {})
+        bot, problem = await chat_bot()
+        if problem:
+            st["error"] = problem
+            print("[chat] chat bot not updated:", problem)
+            save_state()
+            return "error: " + problem
+        cfg = await booking_config() if booking_enabled() else {"calendarId": ""}
+        channels = {CHAT_CHANNELS.get(str(c).lower(), c) for c in (bot.get("channels") or [])} | {"Live_Chat", "WebChat"}
+        res, limits = {}, [st.get("limit") or 0, 4000, 2800, 1900, 1200]     # 0 = everything; GHL may allow less
+        while limits:
+            limit = limits.pop(0)
+            body = {**build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit),
+                    "businessName": data["company_name"][:80], "mode": "auto-pilot", "channels": sorted(channels),
+                    "autoPilotMaxMessages": max(int(bot.get("autoPilotMaxMessages") or 0), 50)}
+            if not bot:                                     # no bot in this account yet: make one for the demo
+                body.update(name=CHAT_BOT_NAME, isPrimary=True, waitTime=2, waitTimeUnit="seconds", sleepEnabled=False)
+            res = await ghl.save_chat_agent(bot.get("id", ""), body)
+            if res.get("id"):
+                st["limit"] = limit                         # remember what fitted
+                break
+            if res.get("status") not in (400, 413, 422):
+                break
+            said = [int(n) for n in re.findall(r"(\d{3,5})\s*char", res.get("error", "")) if 300 <= int(n) < (limit or 10 ** 6)]
+            if said:                                        # "must be shorter than or equal to 3000 characters"
+                limits = [min(said)] + [x for x in limits if x < min(said)]
+        if not res.get("id"):
+            st["error"] = res.get("error", "unknown error")
+            print("[chat] could NOT update the chat bot:", st["error"])
+            save_state()
+            return "error: " + st["error"]
+        if not bot:
+            st.update(id=res["id"], checked=0)              # read it back next time
+            print(f"[chat] created the chat bot '{CHAT_BOT_NAME}' ({res['id']})")
+        st["error"], st["updated"] = "", time.time()
+        # appointment booking (book + reschedule + cancel) in the chat, once
+        if cfg["calendarId"] and time.time() - st.get("actionChecked", 0) > 1800:
+            actions = await ghl.chat_actions(res["id"])
+            if actions is not None:
+                have = next((a for a in actions if a.get("type") == "appointmentBooking"), None)
+                details = {"calendarId": cfg["calendarId"], "onlySendLink": False, "triggerWorkflow": False,
+                           "sleepAfterBooking": False, "transferBot": False, "rescheduleEnabled": True, "cancelEnabled": True}
+                d = (have or {}).get("details") or {}
+                if not have:
+                    made = await ghl.save_chat_action(res["id"], {"type": "appointmentBooking", "name": "Book appointment", "details": details})
+                    st["action"] = made.get("id") or ""
+                    st["actionError"] = made.get("error", "")
+                elif d.get("onlySendLink") or not d.get("rescheduleEnabled") or not d.get("cancelEnabled"):
+                    made = await ghl.save_chat_action(res["id"], {"type": "appointmentBooking", "name": have.get("name") or "Book appointment",
+                                                                  "details": {**details, "calendarId": d.get("calendarId") or cfg["calendarId"]}},
+                                                      have.get("id", ""))
+                    st["action"], st["actionError"] = have.get("id", ""), made.get("error", "")
+                else:
+                    st["action"], st["actionError"] = have.get("id", ""), ""
+                st["actionChecked"] = time.time()
+        save_state()
+        return "updated"
 
 
 async def _after_booking(lead: dict, cfg: dict, headline: str, lines: str, with_opportunity: bool = True) -> None:
@@ -1065,6 +1292,8 @@ async def cancel_for(lead: dict) -> dict:
 def booking_status(ref: str = ""):
     """Lets the page show "booked / changed / cancelled" as soon as the agent has done it during the call."""
     lead = LEADS.get(re.sub(r"[^A-Z0-9]", "", ref.upper()))
+    if lead:
+        lead["seen"] = time.time()
     b = (lead or {}).get("booking") or {}
     return {"booked": bool(b) and not b.get("cancelled"), "cancelled": bool(b.get("cancelled")),
             "when": b.get("when", ""), "timezone": (lead or {}).get("tz", ""),
@@ -1074,7 +1303,8 @@ def booking_status(ref: str = ""):
 # ---------------------------------------------------------------- booking check (what works, what GHL refused)
 SCOPE_FOR = {"agent": "voice-ai-agents.readonly", "actions": "voice-ai-agent-goals.write", "calendar": "calendars.readonly",
              "appointments": "calendars/events.write", "pipelines": "opportunities.readonly",
-             "opportunities": "opportunities.write", "contact-appointments": "contacts.readonly"}
+             "opportunities": "opportunities.write", "contact-appointments": "contacts.readonly",
+             "chat": "conversation-ai.readonly and conversation-ai.write", "calendar-events": "calendars/events.readonly"}
 _check_cache: dict = {"ts": 0.0, "v": None}
 
 
@@ -1083,7 +1313,8 @@ def _ghl_problem(area: str) -> str:
     if not e:
         return ""
     hint = (f" -> add the scope {SCOPE_FOR[area]} to the token (GHL > Settings > Private Integrations)"
-            if e["status"] in (401, 403) and area in SCOPE_FOR else "")
+            if (e["status"] in (401, 403) or "scope" in e["message"].lower() or "authoriz" in e["message"].lower())
+            and area in SCOPE_FOR else "")
     return f"GHL answered {e['message']}{hint}"
 
 
@@ -1109,6 +1340,7 @@ async def booking_check(base: str) -> dict:
     step("Book / change / cancel actions are on the agent", bool(mode) and (on_agent is None or not missing),
          ((_ghl_problem("actions") or STATE.get("actions", {}).get("error")) if not mode else "")
          or ("Missing: " + ", ".join(missing) if missing else
+             "; ".join(STATE.get("actions", {}).get("notes", [])) or
              "The agent hears the result of each action." if mode == "reply" else
              "GHL accepted send-only actions: the agent sends the request but does not hear the result."))
 
@@ -1126,10 +1358,33 @@ async def booking_check(base: str) -> dict:
     step("A pipeline was found for opportunities", bool(cfg["pipelineId"]),
          (f"{cfg['pipelineName']} / stage: {cfg['stageName'] or '-'}" if cfg["pipelineId"] else
           _ghl_problem("pipelines") or "No pipeline in this GHL account. Create one in Opportunities > Pipelines."))
-    for area, label in (("appointments", "Creating / changing / cancelling appointments"), ("opportunities", "Creating opportunities"),
-                        ("contact-appointments", "Finding an appointment from an earlier visit (optional)")):
+    for area, label in (("appointments", "Creating / changing / cancelling appointments"), ("opportunities", "Creating opportunities")):
         if ghl.ERRORS.get(area):
             step(label, False, _ghl_problem(area))
+
+    # text chat in the widget (GHL Conversation AI bot)
+    if chat_enabled():
+        bot, problem = await chat_bot(force=True)
+        cst = STATE.get("chat", {})
+        if problem:
+            step("Text chat: the chat bot can be reached", False, _ghl_problem("chat") or problem)
+        elif not bot:
+            step("Text chat: a chat bot exists", None, "None yet. One is created the next time the form is submitted.")
+        else:
+            chans = ", ".join(bot.get("channels") or []) or "-"
+            step("Text chat: the chat bot is on and answers by itself",
+                 str(bot.get("mode", "")).lower().replace("_", "-") == "auto-pilot" and not cst.get("error"),
+                 cst.get("error") or f"{bot.get('name')} | mode: {bot.get('mode')} | channels: {chans}"
+                 + (" | company text last written " + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(cst["updated"])) if cst.get("updated") else
+                    " | the company text is written when the form is submitted"))
+            if cst.get("updated"):
+                step("Text chat: the chat bot can book, change and cancel appointments", bool(cst.get("action")) and not cst.get("actionError"),
+                     cst.get("actionError") or ("Appointment booking is switched on" if cst.get("action") else "Checked on the next form submission"))
+        await sync_bookings()
+        seen = ghl.ERRORS.get("calendar-events") or ghl.ERRORS.get("contact-appointments")
+        step("Appointments made in the chat are noticed (opportunity + note)", None if seen and not EXACT_TIMES else not seen,
+             (_ghl_problem("calendar-events") or _ghl_problem("contact-appointments")) if seen else
+             "The calendar is read every 40 seconds for recent visitors.")
 
     day_ago = time.time() - 86400
     agent_calls = [e for e in EVENTS if e["source"] == "agent" and e["ts"] > day_ago]
@@ -1139,7 +1394,11 @@ async def booking_check(base: str) -> dict:
          "actions: check that the chat widget uses this agent and that the four actions are switched on in GHL.")
     calls = [{"time": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(e["ts"])), "what": e["kind"], "from": e["source"],
               "result": e["status"], "detail": e["detail"]} for e in reversed(EVENTS[-25:])]
-    return {"ok": all(x["ok"] is not False for x in steps), "steps": steps, "calls": calls}
+    debug = {"voiceActions": [{k: x.get(k) for k in ("name", "type", "method", "url", "keys", "paramKeys")} | {"hasId": bool(x.get("id"))}
+                              for x in on_agent or []],
+             "actionNotes": STATE.get("actions", {}).get("notes", []), "mode": mode,
+             "chat": {k: v for k, v in STATE.get("chat", {}).items() if k in ("id", "bot", "error", "actionError", "backupAt", "updated")}}
+    return {"ok": all(x["ok"] is not False for x in steps), "steps": steps, "calls": calls, "debug": debug}
 
 
 @app.get("/api/booking/check")

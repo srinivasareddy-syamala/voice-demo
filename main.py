@@ -1231,7 +1231,17 @@ async def _start_sync() -> None:
 # "Chat via Live Chat" and "Chat via SMS/Email" are answered by GHL's Conversation AI bot, not by the voice agent.
 # We give that bot the same company knowledge on every form submission and switch on its appointment booking.
 _chat_lock = asyncio.Lock()
-CHAT_CHANNELS = {"live_chat": "Live_Chat", "webchat": "WebChat", "sms": "SMS", "ig": "IG", "fb": "FB", "whatsapp": "WhatsApp"}
+# The demo bot answers the website chat only. Its instructions are rewritten for every visitor, so it must not
+# auto-reply on SMS, WhatsApp, Facebook or Instagram (GHL lists a bot's channels as objects, not plain names).
+CHAT_CHANNELS = ["Live_Chat", "WebChat"]
+
+
+def _channel_label(c) -> str:
+    if isinstance(c, str):
+        return c
+    if isinstance(c, dict):
+        return next((str(c[k]) for k in ("type", "channel", "name", "id", "value", "key") if isinstance(c.get(k), str)), json.dumps(c)[:60])
+    return str(c)
 CHAT_BOT_NAME = "AI Receptionist (Pragna AI demo)"
 
 
@@ -1286,12 +1296,11 @@ async def update_chat_bot(data: dict, visitor: dict) -> str:
             save_state()
             return "error: " + problem
         cfg = await booking_config() if booking_enabled() else {"calendarId": ""}
-        channels = {CHAT_CHANNELS.get(str(c).lower(), str(c)) for c in (bot.get("channels") or []) if isinstance(c, str)} | {"Live_Chat", "WebChat"}
         res, limits = {}, [st.get("limit") or 0, 4000, 2800, 1900, 1200]     # 0 = everything; GHL may allow less
         while limits:
             limit = limits.pop(0)
             body = {**build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit),
-                    "businessName": data["company_name"][:80], "mode": "auto-pilot", "channels": sorted(channels),
+                    "businessName": data["company_name"][:80], "mode": "auto-pilot", "channels": CHAT_CHANNELS,
                     "autoPilotMaxMessages": max(int(bot.get("autoPilotMaxMessages") or 0)
                                                 if str(bot.get("autoPilotMaxMessages") or "0").isdigit() else 0, 50)}
             if not bot:                                     # no bot in this account yet: make one for the demo
@@ -1565,7 +1574,7 @@ async def booking_check(base: str) -> dict:
         elif not bot:
             step("Text chat: a chat bot exists", None, "None yet. One is created the next time the form is submitted.")
         else:
-            chans = ", ".join(str(c) for c in (bot.get("channels") or [])) or "-"
+            chans = ", ".join(_channel_label(c) for c in (bot.get("channels") or [])) or "-"
             step("Text chat: the chat bot is on and answers by itself",
                  str(bot.get("mode", "")).lower().replace("_", "-") == "auto-pilot" and not cst.get("error"),
                  cst.get("error") or f"{bot.get('name')} | mode: {bot.get('mode')} | channels: {chans}"

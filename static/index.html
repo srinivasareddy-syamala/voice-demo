@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Pragna AI — Free AI Voice Agent Preview</title>
+<title>Pragna AI — Free AI Receptionist Preview</title>
 <link rel="icon" type="image/png" href="/static/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -267,6 +267,38 @@
   form.card label{margin:10px 0 4px}
   form.card label.consent{margin:12px 0 0}
 
+  /* ===== v4: "AI Receptionist" panels beside the form, and the after-hours card on the result ===== */
+  .panel{background:#fff;border:1px solid var(--line);border-radius:20px;padding:18px;box-shadow:0 10px 40px #0f172a0d;align-self:stretch;
+         display:flex;flex-direction:column;justify-content:center;min-width:0}
+  .panel h3{margin:0 0 4px;font-size:clamp(16px,1.5vw,19px);color:var(--navy);line-height:1.25}
+  .panel h3 span{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .panel .psub{margin:0 0 12px;font-size:12.5px;color:var(--muted);line-height:1.5}
+  .cando{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+  .cando li{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:12px;background:#F8FAFC;border:1px solid var(--line)}
+  .cando svg{width:34px;height:34px;flex:none}
+  .cando b{display:block;font-size:13.5px;color:var(--navy);line-height:1.3} .cando span{display:block;font-size:12px;color:var(--muted);line-height:1.35}
+  .calc label{display:block;font-size:12px;font-weight:600;color:var(--ink);margin:8px 0 4px}
+  .calc input,.calc select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#F8FAFC;color:var(--navy);
+                           font:600 14px "Plus Jakarta Sans",sans-serif;outline:none}
+  .calc input:focus,.calc select:focus{border-color:#3396F5;background:#fff}
+  .risk{margin-top:14px;display:flex;gap:12px;align-items:center;padding:12px 14px;border-radius:14px;background:#EFF6FF}
+  .risk svg{width:42px;height:42px;flex:none}
+  .risk small{display:block;font-size:11.5px;font-weight:700;color:#2563EB}
+  .risk strong{display:block;font-size:clamp(22px,2.2vw,28px);color:#1D4ED8;line-height:1.15;overflow-wrap:anywhere}
+  .risk em{font-style:normal;font-size:11.5px;color:var(--muted)}
+  .calc .note{margin:8px 0 0;font-size:11px;color:#94A3B8}
+  .tagline{margin:0 0 6px;font-size:16px;font-weight:700;color:var(--navy)}
+  .info-top .pill{white-space:normal;line-height:1.5}
+  .after{text-align:left}
+  .after h3{margin:0 0 6px;font-size:clamp(17px,1.7vw,20px);color:var(--navy);line-height:1.25} .after h3 span{color:#2563EB}
+  .after p{margin:0 0 10px;font-size:13.5px;color:#475569;line-height:1.5}
+  .after .box{background:#F1F5F9;border-radius:14px;padding:12px 14px}
+  .after .box b{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--navy);margin-bottom:8px}
+  .after .box b svg{width:22px;height:22px;flex:none;background:#DBEAFE;border-radius:50%;padding:3px}
+  .after ul{list-style:none;margin:0;padding:0;display:grid;gap:5px;font-size:13px;color:var(--ink)}
+  .after li{display:flex;gap:8px;align-items:center}
+  .after li::before{content:"✓";width:16px;height:16px;border-radius:50%;background:#16A34A;color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center;flex:none}
+
   /* desktop / laptop: the whole landing page on one screen */
   @media(min-width:1021px){
     body{display:flex;flex-direction:column;min-height:100svh}
@@ -317,6 +349,18 @@
     header{padding-top:10px;padding-bottom:4px}
   }
   @media(max-width:380px){ form.card input,select.cc{padding:9px 10px} form.card label{margin-top:6px} }
+  /* panels: compact on short laptop screens, side by side on tablets, stacked on phones */
+  @media(min-width:1021px){ .grid3{align-items:stretch} .grid3 form{align-self:center} .panel{padding:14px 16px} .panel .psub{margin-bottom:8px}
+    .cando{gap:6px} .cando li{padding:6px 10px} .calc label{margin:6px 0 3px} .calc input,.calc select{padding:8px 12px} .risk{margin-top:10px;padding:10px 12px} }
+  @media(min-width:1021px) and (max-height:660px){ .panel .psub,.calc .note{display:none} .cando li{padding:4px 10px} .cando svg{width:28px;height:28px} }
+  @media(max-width:1020px){ .panel{justify-content:flex-start} }
+  @media(max-width:700px){ .grid3{grid-template-columns:1fr} }
+  @media(min-width:761px) and (max-height:720px){      /* result page on short laptop screens */
+    .info-top h2{font-size:clamp(22px,2.3vw,28px);margin:2px 0 4px} .tagline{font-size:14px;margin-bottom:2px} .hint{font-size:13.5px}
+    .after h3{font-size:16px;margin-bottom:4px} .after p{font-size:12.5px;margin-bottom:6px;line-height:1.45}
+    .after .box{padding:8px 12px} .after .box b{margin-bottom:4px;font-size:13px} .after ul{gap:2px;font-size:12.5px}
+    .info-rest .cta-row{margin-top:10px} .stage{row-gap:8px}
+  }
 </style>
 </head>
 <body>
@@ -329,37 +373,26 @@
   <!-- 1. LANDING: headline, form in the middle, a picture either side -->
   <section id="landing">
     <div class="hero">
-      <h1>Hear <span>your own AI voice agent</span> talk about your business</h1>
-      <p class="sub">Enter your website. In about 25 seconds Pragna AI learns your company and you can talk to your agent live — right inside a preview of your own site.</p>
+      <h1>Hear <span>your own AI Receptionist</span> talk about your business</h1>
+      <p class="sub">Enter your website. In about 25 seconds Pragna AI learns your company and you can talk to your AI Receptionist live — right inside a preview of your own site.</p>
     </div>
 
     <div class="grid3">
-      <aside class="side miss">
-        <svg class="floaty" viewBox="0 0 320 230" role="img" aria-label="A phone showing three missed calls after closing time">
-          <defs><linearGradient id="mg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FEE2E2"/><stop offset="1" stop-color="#F1F5F9"/></linearGradient></defs>
-          <path d="M28 122c0-62 52-104 132-104s132 32 132 98-60 102-136 102S28 186 28 122Z" fill="url(#mg)"/>
-          <circle cx="60" cy="60" r="17" fill="#94A3B8"/><circle cx="68" cy="53" r="15" fill="#FBE4E4"/>
-          <g transform="rotate(8 262 72)"><path d="M244 56l18-14 18 14" fill="none" stroke="#94A3B8" stroke-width="2.5" stroke-linecap="round"/><rect x="226" y="56" width="72" height="32" rx="8" fill="#fff" stroke="#E2E8F0" stroke-width="2"/><text x="262" y="77" text-anchor="middle" font-size="13" font-weight="800" fill="#B91C1C" font-family="Plus Jakarta Sans,Arial,sans-serif">CLOSED</text></g>
-          <g class="ring-shake" transform="rotate(-6 160 125)">
-            <rect x="112" y="40" width="96" height="172" rx="18" fill="#0F172A"/>
-            <rect x="119" y="48" width="82" height="156" rx="12" fill="#fff"/>
-            <rect x="146" y="53" width="28" height="6" rx="3" fill="#0F172A"/>
-            <g><rect x="125" y="70" width="70" height="28" rx="8" fill="#FEF2F2"/><circle cx="139" cy="84" r="8" fill="#EF4444"/><path d="M136 81l6 6M142 81l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/><rect x="152" y="77" width="34" height="5" rx="2.5" fill="#FCA5A5"/><rect x="152" y="86" width="22" height="4" rx="2" fill="#FECACA"/></g>
-            <g><rect x="125" y="104" width="70" height="28" rx="8" fill="#FEF2F2"/><circle cx="139" cy="118" r="8" fill="#EF4444"/><path d="M136 115l6 6M142 115l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/><rect x="152" y="111" width="30" height="5" rx="2.5" fill="#FCA5A5"/><rect x="152" y="120" width="24" height="4" rx="2" fill="#FECACA"/></g>
-            <g><rect x="125" y="138" width="70" height="28" rx="8" fill="#FEF2F2"/><circle cx="139" cy="152" r="8" fill="#EF4444"/><path d="M136 149l6 6M142 149l-6 6" stroke="#fff" stroke-width="2" stroke-linecap="round"/><rect x="152" y="145" width="36" height="5" rx="2.5" fill="#FCA5A5"/><rect x="152" y="154" width="18" height="4" rx="2" fill="#FECACA"/></g>
-            <rect x="125" y="174" width="70" height="20" rx="10" fill="#F1F5F9"/>
-          </g>
-          <circle cx="214" cy="50" r="18" fill="#EF4444" stroke="#fff" stroke-width="4"/><text x="214" y="56" text-anchor="middle" font-size="17" font-weight="800" fill="#fff" font-family="Plus Jakarta Sans,Arial,sans-serif">3</text>
-          <path d="M228 184c22 4 40 0 56-12" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 8"/><path d="M276 164l11 6-9 9" fill="none" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span class="pill">Without an agent</span>
-        <h3>A missed call is a missed lead</h3>
-        <p>After hours, at lunch or on another call — the enquiry you didn't answer rings your competitor next.</p>
+      <aside class="panel" aria-labelledby="canDoTitle">
+        <h3 id="canDoTitle">What Your <span>AI Receptionist</span> Can Do</h3>
+        <p class="psub">Handles enquiries, qualifies leads and books appointments — even when you're unavailable.</p>
+        <ul class="cando">
+          <li><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><path d="M14 12h4l2 5-3 2a10 10 0 0 0 5 5l2-3 5 2v4a2 2 0 0 1-2 2A15 15 0 0 1 12 14a2 2 0 0 1 2-2Z"/></svg><div><b>Answer Calls</b><span>24/7, day and night</span></div></li>
+          <li><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><path d="M12 13h16a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-8l-5 4v-4h-3a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/><path d="M16 18h8M16 22h5"/></svg><div><b>Understand Enquiries</b><span>Services, prices, quotes and more</span></div></li>
+          <li><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><rect x="13" y="11" width="14" height="19" rx="3"/><path d="M17 11v-1h6v1M17 17h6M17 21h6M17 25h3"/></svg><div><b>Capture Details</b><span>Name, phone, address and requirements</span></div></li>
+          <li><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><rect x="11" y="13" width="18" height="16" rx="3"/><path d="M11 18h18M16 10v5M24 10v5M16 24l3 2 5-5"/></svg><div><b>Book Appointments</b><span>Schedules visits or call-backs</span></div></li>
+          <li><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><path d="M14 25v-6a6 6 0 0 1 12 0v6l2 2H12l2-2ZM18 29a2 2 0 0 0 4 0"/></svg><div><b>Notify Your Team</b><span>Sends all details to your email / CRM</span></div></li>
+        </ul>
       </aside>
 
       <!-- 2. FORM -->
       <form class="card" id="form" autocomplete="on">
-        <h2>Build my free AI agent</h2>
+        <h2>Build my free AI Receptionist</h2>
         <p class="lead">No card, no app. Ready in about 25 seconds.</p>
         <div class="fields">
           <div><label for="name">Your name *</label>
@@ -380,46 +413,30 @@
           <input type="checkbox" id="consent" name="consent" required>
           <span>I understand and agree that PRAGNA AI may temporarily use publicly available content from my business website — such as text, business information, branding and website screenshots — solely to create and display a personalised AI demonstration. The demo is for illustration purposes only, is not a live production service, and the personalised demo page/link will expire after the demonstration period.</span>
         </label>
-        <button class="btn" id="submitBtn" type="submit" disabled>Build my AI agent →</button>
+        <button class="btn" id="submitBtn" type="submit" disabled>Build my AI Receptionist →</button>
         <div class="err" id="err"></div>
       </form>
 
-      <aside class="side win">
-        <svg class="floaty" viewBox="0 0 320 230" role="img" aria-label="A friendly voice agent wearing a headset answering a call">
-          <defs>
-            <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#DBEAFE"/><stop offset="1" stop-color="#E0F7FF"/></linearGradient>
-            <linearGradient id="jg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#45C9FD"/></linearGradient>
-          </defs>
-          <path d="M26 120c0-62 54-102 134-102s134 30 134 96-62 104-138 104S26 184 26 120Z" fill="url(#wg)"/>
-          <path d="M116 98c0-36 20-58 46-58s46 22 46 58v56c0 8-6 12-12 12h-68c-6 0-12-4-12-12Z" fill="#3B2416"/>
-          <rect x="150" y="128" width="24" height="30" rx="8" fill="#E8B48E"/>
-          <path d="M82 230c0-44 32-66 80-66s80 22 80 66Z" fill="url(#jg)"/>
-          <path d="M144 165l18 24 18-24-18 7Z" fill="#fff"/>
-          <ellipse cx="162" cy="98" rx="30" ry="35" fill="#F5C8A4"/>
-          <path d="M131 94c1-28 16-44 33-44 19 0 30 15 30 38-13-4-23-12-29-23-7 15-18 25-34 29Z" fill="#3B2416"/>
-          <ellipse cx="151" cy="101" rx="3" ry="3.6" fill="#0F172A"/><ellipse cx="173" cy="101" rx="3" ry="3.6" fill="#0F172A"/>
-          <circle cx="143" cy="112" r="5" fill="#F28B82" opacity=".45"/><circle cx="181" cy="112" r="5" fill="#F28B82" opacity=".45"/>
-          <path d="M151 115q11 9 22 0" fill="none" stroke="#B4513A" stroke-width="2.6" stroke-linecap="round"/>
-          <path d="M127 100c0-31 15-52 35-52s35 21 35 52" fill="none" stroke="#0F172A" stroke-width="5" stroke-linecap="round"/>
-          <rect x="119" y="92" width="14" height="26" rx="7" fill="#0F172A"/><rect x="191" y="92" width="14" height="26" rx="7" fill="#0F172A"/>
-          <path d="M126 118c0 16 10 21 25 21" fill="none" stroke="#0F172A" stroke-width="3.5" stroke-linecap="round"/><rect x="150" y="134" width="15" height="10" rx="5" fill="#2563EB"/>
-          <path d="M226 34h60a12 12 0 0 1 12 12v32a12 12 0 0 1-12 12h-38l-15 12 3-12h-10a12 12 0 0 1-12-12V46a12 12 0 0 1 12-12Z" fill="#fff" stroke="#BFDBFE" stroke-width="2"/>
-          <g class="talkbars" fill="url(#jg)"><rect x="228" y="57" width="5" height="10" rx="2.5"/><rect x="237" y="51" width="5" height="22" rx="2.5"/><rect x="246" y="45" width="5" height="34" rx="2.5"/><rect x="255" y="53" width="5" height="18" rx="2.5"/><rect x="264" y="48" width="5" height="28" rx="2.5"/><rect x="273" y="55" width="5" height="14" rx="2.5"/><rect x="282" y="58" width="5" height="8" rx="2.5"/></g>
-          <circle cx="62" cy="80" r="26" fill="#fff" stroke="#BBF7D0" stroke-width="2"/>
-          <path d="M52 71c0 11 8 19 19 19l3-6-6-4-3 3c-3-1-5-3-6-6l3-3-4-6Z" fill="#22C55E"/>
-          <circle cx="83" cy="60" r="11" fill="#22C55E" stroke="#fff" stroke-width="3"/><path d="M78 60l4 4 6-7" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <rect x="30" y="150" width="62" height="28" rx="14" fill="#0F172A"/><text x="61" y="169" text-anchor="middle" font-size="14" font-weight="800" fill="#fff" font-family="Plus Jakarta Sans,Arial,sans-serif">24/7</text>
-          <rect x="238" y="136" width="62" height="52" rx="12" fill="#fff" stroke="#BFDBFE" stroke-width="2"/><path d="M238 148a12 12 0 0 1 12-12h38a12 12 0 0 1 12 12v6h-62Z" fill="#2563EB"/><path d="M258 171l8 8 14-15" fill="none" stroke="#22C55E" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span class="pill">With Pragna AI</span>
-        <h3>Never miss a lead again</h3>
-        <p>Your AI voice agent picks up straight away, 24/7 — answers questions, qualifies the lead and books the meeting.</p>
+      <aside class="panel calc" aria-labelledby="riskTitle">
+        <h3 id="riskTitle">Potential <span>Revenue at Risk</span></h3>
+        <p class="psub">See the potential value of missed calls for your business.</p>
+        <label for="rkCalls">Estimated missed calls per month</label>
+        <input id="rkCalls" type="number" inputmode="numeric" min="0" step="1" value="10">
+        <label for="rkValue">Average job value (£)</label>
+        <input id="rkValue" type="text" inputmode="decimal" value="1,500">
+        <label for="rkRate">Estimated conversion rate</label>
+        <select id="rkRate"><option>5%</option><option>10%</option><option>15%</option><option selected>20%</option><option>25%</option><option>30%</option><option>40%</option><option>50%</option></select>
+        <div class="risk" aria-live="polite">
+          <svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="12" fill="#2563EB"/><path d="M12 28v-5M18 28v-9M24 28v-7M30 28V15" stroke="#fff" stroke-width="3" stroke-linecap="round"/><path d="M11 17l7-5 5 3 7-6" stroke="#BFDBFE" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div><small>Estimated Revenue at Risk</small><strong id="rkOut">£3,000</strong><em>per month</em></div>
+        </div>
+        <p class="note">Illustrative estimate based on your assumptions.</p>
       </aside>
     </div>
 
     <div class="steps3">
       <div class="step"><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><circle cx="20" cy="20" r="10"/><path d="M10 20h20M20 10c4 3 4 17 0 20M20 10c-4 3-4 17 0 20"/></svg><div><b>1. Enter your website</b><span>We read your public pages — services, hours, FAQs.</span></div></div>
-      <div class="step"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="12" fill="#EFF6FF"/><rect x="10" y="10" width="9" height="9" rx="3" fill="#45C9FD"/><rect x="21" y="10" width="9" height="9" rx="3" fill="#3396F5"/><rect x="10" y="21" width="9" height="9" rx="3" fill="#2563EB"/><rect x="21" y="21" width="9" height="9" rx="3" fill="#45C9FD"/></svg><div><b>2. We build your agent</b><span>Trained on your business in about 25 seconds.</span></div></div>
+      <div class="step"><svg viewBox="0 0 40 40" fill="none"><rect width="40" height="40" rx="12" fill="#EFF6FF"/><rect x="10" y="10" width="9" height="9" rx="3" fill="#45C9FD"/><rect x="21" y="10" width="9" height="9" rx="3" fill="#3396F5"/><rect x="10" y="21" width="9" height="9" rx="3" fill="#2563EB"/><rect x="21" y="21" width="9" height="9" rx="3" fill="#45C9FD"/></svg><div><b>2. We build your AI Receptionist</b><span>Trained on your business in about 25 seconds.</span></div></div>
       <div class="step"><svg viewBox="0 0 40 40" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round"><rect width="40" height="40" rx="12" fill="#EFF6FF" stroke="none"/><rect x="16" y="9" width="8" height="14" rx="4"/><path d="M12 19a8 8 0 0 0 16 0M20 27v4"/></svg><div><b>3. Talk to it live</b><span>Tap the mic and ask it anything about your company.</span></div></div>
     </div>
   </section>
@@ -435,7 +452,7 @@
       </div>
       <div class="wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
     </div>
-    <h3>Building your AI voice agent…</h3>
+    <h3>Building your AI Receptionist…</h3>
     <p id="caption">Reading your website</p>
     <div class="bar"><i id="barFill"></i></div>
     <div class="pct" id="pct">0%</div>
@@ -445,21 +462,27 @@
 <!-- 4. RESULT: company details + a phone showing their website with the GHL chat widget inside -->
 <section id="result" class="stage hidden">
   <div class="info-top">
-    <span class="pill">✓ Your agent is ready</span>
-    <h2>Meet <span id="infoCompany">your company</span>'s AI voice agent</h2>
+    <span class="pill">Prepared exclusively for <span id="pillCompany">you</span></span>
+    <h2>Meet <span id="infoCompany">your company</span>'s AI Receptionist</h2>
+    <p class="tagline">Never miss another lead.</p>
     <p class="hint">In the phone, tap <b>Chat with Voice</b>, allow the microphone and say hello.</p>
   </div>
   <div class="phone">
     <div class="screen">
       <div class="urlbar">🔒 <span id="urlText"></span></div>
-      <iframe id="pv" class="site" title="Your website with the AI agent" allow="microphone *; autoplay *; clipboard-write *"></iframe>
+      <iframe id="pv" class="site" title="Your website with the AI Receptionist" allow="microphone *; autoplay *; clipboard-write *"></iframe>
     </div>
   </div>
   <div class="info-rest">
     <div class="talk-status" id="talkStatus"></div>
-    <p class="w-desc" id="wDesc"></p>
-    <div class="chips" id="wServices"></div>
-    <div class="w-contact" id="wContact"></div>
+    <div class="after">
+      <h3>What Happens When Someone Calls <span>After Hours</span>?</h3>
+      <p id="afterText">Many potential customers call outside normal working hours. If the call isn't answered, they often move on to a competitor.</p>
+      <div class="box">
+        <b><svg viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Your AI Receptionist:</b>
+        <ul><li>Answers immediately</li><li>Understands the customer's needs</li><li>Captures key details</li><li>Books an appointment or callback</li><li>Sends the information to your team</li></ul>
+      </div>
+    </div>
     <div class="cta-row">
       <button type="button" class="bookbtn hidden" id="bookBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
@@ -517,9 +540,22 @@ COUNTRIES.forEach(([flag, iso, code], i) => {
 });
 $("consent").addEventListener("change", e => { $("submitBtn").disabled = !e.target.checked; });
 
+/* ---------- "Potential Revenue at Risk" calculator: calls x job value x conversion rate ---------- */
+function riskCalc(){
+  const num = v => parseFloat(String(v).replace(/[^0-9.]/g, "")) || 0;
+  const total = num($("rkCalls").value) * num($("rkValue").value) * num($("rkRate").value) / 100;
+  txt($("rkOut"), "£" + Math.round(total).toLocaleString("en-GB"));
+}
+["rkCalls", "rkValue", "rkRate"].forEach(id => { $(id).addEventListener("input", riskCalc); $(id).addEventListener("change", riskCalc); });
+$("rkValue").addEventListener("blur", e => {             // 1500 -> 1,500
+  const n = parseFloat(e.target.value.replace(/[^0-9.]/g, ""));
+  if (!isNaN(n)) e.target.value = n.toLocaleString("en-GB", {maximumFractionDigits: 2});
+});
+riskCalc();
+
 /* ---------- 25-second progress bar; real work runs in the background ---------- */
 const CAPTIONS = ["Reading your website", "Learning your services and FAQs", "Matching your brand colours",
-                  "Building your AI agent", "Tuning the voice", "Almost ready"];
+                  "Building your AI Receptionist", "Tuning the voice", "Almost ready"];
 function runProgress(seconds){
   const start = performance.now();
   let done = false, timer, shown = -1;
@@ -580,22 +616,20 @@ function showCompany(d){
   const host = new URL(c.website).hostname.replace(/^www\./, "");
   txt($("urlText"), host);
   txt($("infoCompany"), c.company_name);
-  txt($("wDesc"), c.description || "");
+  txt($("pillCompany"), c.company_name);
 
-  const services = (c.services || []).filter(s => s.length <= 40).slice(0, 6);
-  $("wServices").innerHTML = "";
-  services.forEach(s => $("wServices").appendChild(txt(Object.assign(document.createElement("span"), {className: "chip"}), s)));
-  $("wServices").classList.toggle("hidden", !services.length);
-
-  const rows = [...(c.phones||[]).slice(0,1).map(x => "📞 " + x), ...(c.emails||[]).slice(0,1).map(x => "✉️ " + x),
-                ...(c.hours||[]).slice(0,1).map(x => "🕘 " + x)];
-  $("wContact").innerHTML = "";
-  rows.forEach(r => $("wContact").appendChild(txt(document.createElement("div"), r)));
+  // "…call outside normal working hours — for <their services> or to get a quote."
+  const NAV = /^(our|about|contact|areas?|home|blog|news|faqs?|get|why|meet|gallery|testimonials?|reviews?|book|call|request|free)\b/i;
+  const lower = x => x.split(" ").map(w => /^[A-Z0-9&]{2,}$/.test(w) ? w : w.toLowerCase()).join(" ");
+  const svc = (c.services || []).filter(x => x.length <= 36 && !NAV.test(x.trim()) && !/[£$€\d]/.test(x)).slice(0, 2).map(lower);
+  txt($("afterText"), "Many potential customers call outside normal working hours — " +
+    (svc.length ? "for " + svc.join(", ") + " or to get a quote" : "to ask a question, make a booking or get a quote") +
+    ". If the call isn't answered, they often move on to a competitor.");
 
   const waDigits = (CFG.whatsapp || "").replace(/[^\d]/g, "");
   $("waLink2").classList.toggle("hidden", !waDigits);
   $("waLink2").href = "https://wa.me/" + waDigits + "?text=" +
-    encodeURIComponent("Hi Pragna AI, I just tried the AI voice agent demo for " + c.company_name + " and would like to know more.");
+    encodeURIComponent("Hi Pragna AI, I just tried the AI Receptionist demo for " + c.company_name + " and would like to know more.");
 
   applyTheme(d.theme);
   setupBooking(d.bookingRef, d.booking);
@@ -736,7 +770,7 @@ function setStatus(kind, msg){
 window.addEventListener("message", e => {
   if (e.source !== $("pv").contentWindow || !e.data) return;
   if (e.data.type !== "voice") return;
-  if (e.data.ok) setStatus("good", "✓ Connected — say hello! The agent knows your company.");
+  if (e.data.ok) setStatus("good", "✓ Connected — say hello! Your AI Receptionist knows your company.");
   else setStatus("bad", e.data.noAgent
     ? "The chat widget has no Voice AI agent selected in GHL (Sites → Chat Widget → choose your agent)."
     : "The voice call was refused (" + e.data.status + "). Please try again.");

@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import hmac
+from html import escape as _html_escape
 import json
 import os
 import re
@@ -91,6 +92,8 @@ def _free_line(line: dict) -> None:
     lead = LEADS.get(line["ref"]) if line["ref"] else None
     if lead:
         lead["lineEnded"] = True
+        if lead.get("emailDue"):                  # their session is over: send the appointment email now
+            lead["emailDue"] = time.time()
     line.update(ticket="", ref="", since=0.0)
 
 
@@ -551,6 +554,8 @@ def release(ref: str = ""):
     line = line_of(lead)
     if line:
         _free_line(line)
+    elif lead and lead.get("emailDue"):
+        lead["emailDue"] = time.time()
     return {"ok": True}
 
 
@@ -1191,10 +1196,12 @@ async def sync_bookings() -> None:
                 if same and _event_state(same[1]) in ("cancelled", "invalid"):
                     lead["booking"] = {**b, "cancelled": True}
                     log_event("cancel", "ghl", "cancelled", f"The appointment on {b.get('when')} was cancelled in GHL (chat or team)")
+                    queue_booking_email(lead)
                     bg(_after_booking(lead, cfg, "APPOINTMENT CANCELLED (in chat or in GHL)", f"Cancelled appointment: {b.get('when', '-')}", False))
                 elif same and EXACT_TIMES and _parse_when(b.get("start", ""), tz) != same[0]:
                     lead["booking"] = {**b, **_booking_from(*same), "opportunityId": b.get("opportunityId", "")}
                     log_event("change", "ghl", "rescheduled", f"Moved in GHL (chat or team) to {lead['booking']['when']}")
+                    queue_booking_email(lead)
                     bg(_after_booking(lead, cfg, "APPOINTMENT CHANGED (in chat or in GHL)",
                                       f"New time: {lead['booking']['when']} ({tz_name(tz)})\nPrevious time: {b.get('when', '-')}"))
                 if same:
@@ -1208,9 +1215,93 @@ async def sync_bookings() -> None:
                 if added and added.timestamp() < lead.get("ts", 0) - 300:      # made before this visit: nothing new to record
                     continue
                 log_event("book", "ghl", "booked", f"Booked in GHL (chat bot or team): {lead['booking']['when']} ({tz_name(tz)})")
+                queue_booking_email(lead)
                 bg(_after_booking(lead, cfg, "APPOINTMENT BOOKED (by the chat bot or directly in GHL)",
                                   f"When: {lead['booking']['when']} ({tz_name(tz)})\nCalendar: {cfg['calendarName'] or cfg['calendarId']}"))
         save_state()
+
+
+# ---------------------------------------------------------------- appointment email to the customer
+# After the call (when the page closes, the line is taken back, or BOOKING_EMAIL_DELAY seconds after the last
+# change) the customer gets one email with the final appointment: booked, moved or cancelled. Sent by GHL
+# (Conversations API) from BOOKING_EMAIL_FROM, so it also appears in the contact's conversation in GHL.
+def email_enabled() -> bool:
+    return ghl.configured() and os.getenv("BOOKING_EMAIL_ENABLED", "1").lower() not in ("0", "false", "no")
+
+
+def email_from() -> str:
+    return os.getenv("BOOKING_EMAIL_FROM", "pragna1@angaluri.com").strip()
+
+
+def queue_booking_email(lead: dict) -> None:
+    """Send the appointment email a little later, so several changes in one call become one email."""
+    if email_enabled() and lead.get("contactId") and lead.get("booking"):
+        lead["emailDue"] = time.time() + max(0, int(os.getenv("BOOKING_EMAIL_DELAY", "300") or 0))
+
+
+def _email_key(b: dict) -> str:
+    return f"{b.get('appointmentId')}|{b.get('start')}|{bool(b.get('cancelled'))}"
+
+
+def _esc(v) -> str:
+    return _html_escape(str(v or ""))
+
+
+def booking_email(lead: dict, b: dict, kind: str, slot_mins: int) -> tuple[str, str]:
+    brand = os.getenv("BRAND_NAME", "Pragna AI")
+    first = ((lead.get("name") or "").strip().split(" ") or [""])[0] or "there"
+    company = lead.get("company") or lead.get("website") or "your business"
+    tzn = tz_name(get_tz(lead.get("tz", "")))
+    when = b.get("when") or "-"
+    if kind == "cancelled":
+        subject = f"Your appointment with {brand} has been cancelled"
+        lead_in = f"Your appointment with the {brand} team on <b>{_esc(when)}</b> ({_esc(tzn)} time) has been cancelled."
+        rows, close = [], ("If you would like a new time, just reply to this email or try your AI Receptionist preview again "
+                           "and ask it to book one.")
+    else:
+        subject = (f"Your appointment with {brand} has been moved to {when}" if kind == "moved"
+                   else f"Your appointment with {brand} is confirmed: {when}")
+        lead_in = ("Your appointment has been moved. Here are the new details:" if kind == "moved" else
+                   f"Thank you for trying your free AI Receptionist preview from {brand}. Your appointment is booked:")
+        rows = [("Date and time", f"{when} ({tzn} time)"), ("Length", f"{slot_mins} minutes"),
+                ("With", f"The {brand} team"), ("About", f"An AI Receptionist for {company}")]
+        close = "Need a different time? Just reply to this email and we will move it for you."
+    table = "".join(f'<tr><td style="padding:6px 12px 6px 0;color:#5b6573;white-space:nowrap">{_esc(k)}</td>'
+                    f'<td style="padding:6px 0;font-weight:600">{_esc(v)}</td></tr>' for k, v in rows)
+    body = (f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#14284b;max-width:560px">'
+            f'<p>Hi {_esc(first)},</p><p>{lead_in}</p>'
+            + (f'<table style="border-collapse:collapse;margin:8px 0 16px">{table}</table>' if table else "")
+            + f'<p>{close}</p><p>Best regards,<br>The {_esc(brand)} team</p></div>')
+    return subject, body
+
+
+async def send_due_emails() -> None:
+    if not email_enabled():
+        return
+    now = time.time()
+    due = [l for l in LEADS.values() if l.get("emailDue") and l["emailDue"] <= now]
+    if not due:
+        return
+    cfg = await booking_config()
+    for lead in due:
+        lead.pop("emailDue", None)
+        b = lead.get("booking") or {}
+        key = _email_key(b)
+        if not b.get("appointmentId") or not lead.get("contactId") or key == lead.get("emailSent"):
+            continue                                       # nothing new to tell them
+        if b.get("cancelled") and not lead.get("emailSent"):
+            continue                                       # booked and cancelled before any email went out
+        kind = ("cancelled" if b.get("cancelled") else
+                "moved" if lead.get("emailSent") and lead["emailSent"].split("|")[0] == str(b.get("appointmentId")) else "booked")
+        subject, body = booking_email(lead, b, kind, cfg.get("slotMins") or 30)
+        res = await ghl.send_email(lead["contactId"], subject, body, email_from(), lead.get("email", ""))
+        who = f"{lead.get('company') or lead.get('website') or '-'} ({lead.get('name') or '-'})"
+        if res.get("id"):
+            lead["emailSent"] = key
+            log_event("email", "server", "sent", f"{kind} email to {who}" + (f" - {res['note']}" if res.get("note") else f" from {email_from()}"))
+        else:
+            log_event("email", "server", "error", f"{kind} email to {who} NOT sent: {res.get('error')}")
+    save_state()
 
 
 async def _sync_loop() -> None:
@@ -1220,6 +1311,10 @@ async def _sync_loop() -> None:
             await sync_bookings()
         except Exception as e:                              # never let the loop die
             record_error("reading the calendar for chat bookings", e)
+        try:
+            await send_due_emails()
+        except Exception as e:
+            record_error("sending appointment emails", e)
 
 
 @app.on_event("startup")
@@ -1357,13 +1452,17 @@ async def _after_booking(lead: dict, cfg: dict, headline: str, lines: str, with_
     if with_opportunity:
         opp = {}
         if cfg["pipelineId"]:
-            opp = await ghl.save_opportunity(cid, f"{company} - AI voice agent demo ({name})", cfg["pipelineId"], cfg["stageId"])
+            opp = await ghl.save_opportunity(cid, f"{company} - AI voice agent demo ({name})", cfg["pipelineId"], cfg["stageId"],
+                                            (lead.get("booking") or {}).get("opportunityId", ""))
         if opp.get("id"):
             if lead.get("booking"):
                 lead["booking"]["opportunityId"] = opp["id"]
                 save_state()
-            opp_line = (f"Opportunity {'created' if opp.get('new') else 'updated'} in pipeline \"{cfg['pipelineName'] or cfg['pipelineId']}\""
+            opp_line = (f"Opportunity {'created' if opp.get('new') else 'updated (this contact already had one in the pipeline)'}"
+                        f" in pipeline \"{cfg['pipelineName'] or cfg['pipelineId']}\""
                         + (f", stage \"{cfg['stageName']}\"" if cfg["stageName"] else "")) + "\n"
+            log_event("opportunity", "server", "created" if opp.get("new") else "updated",
+                      f"{company} ({name}) - {opp['id']} - {headline}")
         else:
             opp_line = f"Opportunity NOT created ({opp.get('error') or 'no pipeline found in GHL'})\n"
             log_event("opportunity", "server", "error", opp_line.strip())
@@ -1397,6 +1496,9 @@ async def book_for(lead: dict, date_s: str, time_s: str, source: str = "agent") 
         return dict(NO_BOOKING)
     old = await current_booking(lead) or {}
     if old and _parse_when(old.get("start", ""), tz) == start:
+        if not old.get("opportunityId"):        # e.g. booked in GHL directly: still give them their opportunity
+            bg(_after_booking(lead, cfg, "APPOINTMENT CONFIRMED", f"When: {when} ({tz_name(tz)})"))
+        queue_booking_email(lead)
         return {"status": "booked", "message": f"Already booked: {when} ({tz_name(tz)} time).", "when": when, "start": old["start"]}
     one_way = source == "agent" and _astate(lead.get("agent", "")).get("mode") == "send"   # the agent will not hear our answer
 
@@ -1446,6 +1548,7 @@ async def book_for(lead: dict, date_s: str, time_s: str, source: str = "agent") 
     lead.pop("tried", None)
     save_state()
     cal = cfg["calendarName"] or cfg["calendarId"]
+    queue_booking_email(lead)
     if moved:
         bg(_after_booking(lead, cfg, "APPOINTMENT CHANGED",
                           f"New time: {when} ({tz_name(tz)})\nPrevious time: {old.get('when', '-')}\nCalendar: {cal}"))
@@ -1472,6 +1575,7 @@ async def cancel_for(lead: dict) -> dict:
         if (l.get("booking") or {}).get("appointmentId") == old["appointmentId"]:
             l["booking"] = {**l["booking"], "cancelled": True}
     lead["booking"] = {**old, "cancelled": True}
+    queue_booking_email(lead)
     save_state()
     bg(_after_booking(lead, cfg, "APPOINTMENT CANCELLED", f"Cancelled appointment: {old.get('when', '-')}", False))
     return {"status": "cancelled", "when": old.get("when", ""),
@@ -1495,7 +1599,8 @@ def booking_status(ref: str = ""):
 SCOPE_FOR = {"agent": "voice-ai-agents.readonly", "actions": "voice-ai-agent-goals.write", "calendar": "calendars.readonly",
              "appointments": "calendars/events.write", "pipelines": "opportunities.readonly",
              "opportunities": "opportunities.write", "contact-appointments": "contacts.readonly",
-             "chat": "conversation-ai.readonly and conversation-ai.write", "calendar-events": "calendars/events.readonly"}
+             "chat": "conversation-ai.readonly and conversation-ai.write", "calendar-events": "calendars/events.readonly",
+             "email": "conversations/message.write"}
 _check_cache: dict = {"ts": 0.0, "v": None}
 
 
@@ -1563,6 +1668,11 @@ async def booking_check(base: str) -> dict:
     for area, label in (("appointments", "Creating / changing / cancelling appointments"), ("opportunities", "Creating opportunities")):
         if ghl.ERRORS.get(area):
             step(label, False, _ghl_problem(area))
+    if email_enabled():
+        mails = [e for e in EVENTS if e["kind"] == "email"]
+        step("Appointment emails to the customer", (mails[-1]["status"] == "sent") if mails else None,
+             (mails[-1]["detail"] if mails else f"None sent yet. Sent from {email_from()} after the call, once an appointment is booked.")
+             + ("" if not ghl.ERRORS.get("email") else f" | {_ghl_problem('email')}"))
 
     # text chat in the widget (GHL Conversation AI bot)
     if chat_enabled():

@@ -49,7 +49,7 @@ Without GHL keys it runs in demo mode: scraping and the company view work, but t
 
 ## Appointments: book, change, cancel (calendar + opportunity)
 During the demo call the agent asks **"Would you like to book an appointment with the Pragna AI team?"** as soon
-as the visitor sounds interested. It can then **book**, **change the time** and **cancel**. The same is available
+as the visitor sounds interested; if the visitor asks to book straight away, it books at once. It can then **book**, **change the time** and **cancel**. The same is available
 from the **Book an appointment / Change time** button next to the phone, and the page follows what the agent does.
 
 What happens in GHL:
@@ -59,6 +59,12 @@ What happens in GHL:
 - **Cancel**: the appointment is marked cancelled (it stays visible in the calendar); note "APPOINTMENT CANCELLED".
   The opportunity is left open so the team can follow up.
 - A returning visitor (same email/phone) can change or cancel the appointment made in an earlier visit.
+- **Opportunity**: every booking or change creates or updates it. GHL keeps one opportunity per contact in a
+  pipeline, so testing again with the same email updates the existing one (moved back to the booking stage,
+  status open) instead of adding a second. The check page lists each one as "opportunity created / updated".
+- **Email to the customer**: after the call (when the page is closed, or `BOOKING_EMAIL_DELAY` seconds after the
+  last change) GHL emails the final appointment from `BOOKING_EMAIL_FROM` (pragna1@angaluri.com): confirmed,
+  moved or cancelled. Several changes in one call give one email. Needs the scope `conversations/message.write`.
 
 How it works: the server adds four *custom actions* to the Voice AI agent (AI Agents → Voice AI → agent → Actions):
 `Check appointment times`, `Book appointment`, `Change appointment time`, `Cancel appointment`. They call
@@ -71,7 +77,8 @@ error text, and a list of the latest booking requests the agent or the page made
 
 Setup:
 1. Add these scopes to the Private Integration token: `voice-ai-agent-goals.write`, `calendars.readonly`,
-   `calendars/events.write`, `opportunities.readonly`, `opportunities.write`, `contacts.readonly`.
+   `calendars/events.write`, `opportunities.readonly`, `opportunities.write`, `contacts.readonly`,
+   `conversations/message.write` (appointment email).
 2. Have at least one active **calendar** (with availability and a team member) and one **pipeline**.
    The app picks the first active calendar / first pipeline, preferring names with "demo" and a stage with
    "appointment" or "booked". To choose exactly, set `GHL_CALENDAR_ID`, `GHL_PIPELINE_ID`, `GHL_PIPELINE_STAGE_ID`.

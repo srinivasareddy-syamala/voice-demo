@@ -95,7 +95,7 @@ ERRORS: dict[str, dict] = {}
 AREAS = (("/conversation-ai", "chat"), ("/voice-ai/actions", "actions"), ("/voice-ai/agents", "agent"),
          ("/calendars/events/appointments", "appointments"), ("/calendars/events", "calendar-events"),
          ("/calendars", "calendar"), ("/opportunities/pipelines", "pipelines"), ("/opportunities", "opportunities"),
-         ("/contacts", "contacts"))
+         ("/contacts", "contacts"), ("/conversations/messages", "email"))
 
 
 def _area(path: str) -> str:
@@ -199,10 +199,18 @@ async def list_pipelines() -> list[dict]:
     return j.get("pipelines") or [] if s == 200 else []
 
 
-async def save_opportunity(contact_id: str, name: str, pipeline_id: str, stage_id: str = "") -> dict:
+async def save_opportunity(contact_id: str, name: str, pipeline_id: str, stage_id: str = "", existing_id: str = "") -> dict:
     """POST /opportunities/ (scope: opportunities.write). If this contact already has one in the pipeline
-    (GHL can forbid duplicates) the existing one is moved to the stage instead. -> {"id","new"} or {"error"}."""
+    (GHL can forbid duplicates) the existing one is moved to the stage instead. -> {"id","new"} or {"error"}.
+    existing_id = the opportunity this appointment already has (a changed time): updated, never duplicated."""
     loc = os.environ["GHL_LOCATION_ID"]
+    if existing_id:
+        upd = {"name": name[:200], "status": "open", "pipelineId": pipeline_id}
+        if stage_id:
+            upd["pipelineStageId"] = stage_id
+        s0, _ = await _call("PUT", f"/opportunities/{existing_id}", json=upd)
+        if s0 == 200:
+            return {"id": existing_id, "new": False}
     body = {"pipelineId": pipeline_id, "locationId": loc, "name": name[:200], "status": "open", "contactId": contact_id}
     if stage_id:
         body["pipelineStageId"] = stage_id
@@ -220,6 +228,29 @@ async def save_opportunity(contact_id: str, name: str, pipeline_id: str, stage_i
         upd["pipelineStageId"] = stage_id
     s3, j3 = await _call("PUT", f"/opportunities/{opp['id']}", json=upd)
     return {"id": opp["id"], "new": False} if s3 == 200 else {"error": _err(s3, j3)}
+
+
+async def send_email(contact_id: str, subject: str, html: str, email_from: str = "", email_to: str = "") -> dict:
+    """POST /conversations/messages type Email (scope: conversations/message.write). GHL sends it to the
+    contact's email address and keeps it in the contact's conversation. -> {"id"} or {"error"}.
+    If GHL refuses the From address (its domain is not set up for sending in GHL), it is sent again from
+    the account's default sending address so the customer still gets it."""
+    body = {"type": "Email", "contactId": contact_id, "subject": subject[:250], "html": html}
+    if email_to:
+        body["emailTo"] = email_to
+    if email_from:
+        body["emailFrom"] = email_from
+    s, j = await _call("POST", "/conversations/messages", "2021-04-15", json=body)
+    if s in (200, 201):
+        return {"id": j.get("emailMessageId") or j.get("messageId") or j.get("id") or "sent"}
+    first = _err(s, j)
+    if email_from and s in (400, 422):
+        body.pop("emailFrom")
+        s2, j2 = await _call("POST", "/conversations/messages", "2021-04-15", json=body)
+        if s2 in (200, 201):
+            return {"id": j2.get("emailMessageId") or j2.get("messageId") or j2.get("id") or "sent",
+                    "note": f"sent from the account's default address, because GHL refused {email_from} ({first})"}
+    return {"error": first}
 
 
 # ---------------------------------------------------------------- voice agent actions (tools the agent can use in a call)

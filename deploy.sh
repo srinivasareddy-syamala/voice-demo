@@ -31,15 +31,12 @@ main() {
 
   echo
   echo "==> [1/7] Installing system packages (Python, Git, Caddy)..."
-  apt-get update -y -q
-  apt-get install -y -q python3 python3-venv python3-pip git curl gnupg ca-certificates \
-                        debian-keyring debian-archive-keyring apt-transport-https
+  # Caddy's own package server (dl.cloudsmith.io) now answers "402 Payment Required", which made
+  # "apt-get update" fail and stopped every deploy. Remove it; Ubuntu's own repository has Caddy.
+  rm -f /etc/apt/sources.list.d/caddy-stable.list
+  apt-get update -y -q || echo "    (some package lists could not be refreshed - carrying on)"
+  apt-get install -y -q python3 python3-venv python3-pip git curl ca-certificates
   if ! command -v caddy >/dev/null 2>&1; then
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
-      | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
-      > /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update -y -q
     apt-get install -y -q caddy
   fi
 

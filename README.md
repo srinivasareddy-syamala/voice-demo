@@ -65,6 +65,8 @@ What happens in GHL:
 - **Email to the customer**: after the call (when the page is closed, or `BOOKING_EMAIL_DELAY` seconds after the
   last change) GHL emails the final appointment from `BOOKING_EMAIL_FROM` (pragna1@angaluri.com): confirmed,
   moved or cancelled. Several changes in one call give one email. Needs the scope `conversations/message.write`.
+  A minute later the server asks GHL whether it was delivered (scope `conversations/message.readonly`); if it
+  failed from that address, it is sent once more from the account's default address. The check page shows each step.
 
 How it works: the server adds four *custom actions* to the Voice AI agent (AI Agents → Voice AI → agent → Actions):
 `Check appointment times`, `Book appointment`, `Change appointment time`, `Cancel appointment`. They call
@@ -78,7 +80,7 @@ error text, and a list of the latest booking requests the agent or the page made
 Setup:
 1. Add these scopes to the Private Integration token: `voice-ai-agent-goals.write`, `calendars.readonly`,
    `calendars/events.write`, `opportunities.readonly`, `opportunities.write`, `contacts.readonly`,
-   `conversations/message.write` (appointment email).
+   `conversations/message.write` and `conversations/message.readonly` (appointment email + its delivery status).
 2. Have at least one active **calendar** (with availability and a team member) and one **pipeline**.
    The app picks the first active calendar / first pipeline, preferring names with "demo" and a stage with
    "appointment" or "booked". To choose exactly, set `GHL_CALENDAR_ID`, `GHL_PIPELINE_ID`, `GHL_PIPELINE_STAGE_ID`.

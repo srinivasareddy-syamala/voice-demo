@@ -1298,9 +1298,39 @@ async def send_due_emails() -> None:
         who = f"{lead.get('company') or lead.get('website') or '-'} ({lead.get('name') or '-'})"
         if res.get("id"):
             lead["emailSent"] = key
+            if res.get("messageId"):            # look again in a minute: GHL can accept an email and fail to deliver it
+                lead["emailCheck"] = {"id": res["messageId"], "at": time.time() + 60, "kind": kind,
+                                      "fromSet": not res.get("note"), "subject": subject, "body": body}
             log_event("email", "server", "sent", f"{kind} email to {who}" + (f" - {res['note']}" if res.get("note") else f" from {email_from()}"))
         else:
             log_event("email", "server", "error", f"{kind} email to {who} NOT sent: {res.get('error')}")
+    save_state()
+
+
+async def check_sent_emails() -> None:
+    """A minute after sending, ask GHL whether the email was delivered. If it failed while sent from
+    BOOKING_EMAIL_FROM (usually: that domain is not set up for sending in GHL), send it once more from
+    the account's default address."""
+    now = time.time()
+    for lead in [l for l in LEADS.values() if (l.get("emailCheck") or {}).get("at", 1e18) <= now]:
+        chk = lead.pop("emailCheck")
+        who = f"{lead.get('company') or lead.get('website') or '-'} ({lead.get('name') or '-'})"
+        st = await ghl.message_status(chk["id"])
+        if st["status"] in ("failed", "undelivered", "bounced", "error", "rejected"):
+            log_event("email", "ghl", "failed", f"{chk['kind']} email to {who} was NOT delivered: {st['error'] or st['status']}")
+            if chk.get("fromSet") and lead.get("contactId"):
+                res = await ghl.send_email(lead["contactId"], chk["subject"], chk["body"], "", lead.get("email", ""))
+                if res.get("id"):
+                    log_event("email", "server", "sent", f"{chk['kind']} email to {who} sent again from the account's default "
+                                                         f"address, because {email_from()} could not deliver it")
+                    if res.get("messageId"):
+                        lead["emailCheck"] = {**chk, "id": res["messageId"], "at": time.time() + 60, "fromSet": False}
+                else:
+                    log_event("email", "server", "error", f"{chk['kind']} email to {who} could not be sent again: {res.get('error')}")
+        elif st["status"] == "unknown":
+            log_event("email", "ghl", "unknown", f"could not read the delivery status of the {chk['kind']} email to {who}: {st['error']}")
+        else:
+            log_event("email", "ghl", st["status"], f"{chk['kind']} email to {who}: GHL status {st['status']}")
     save_state()
 
 
@@ -1315,6 +1345,10 @@ async def _sync_loop() -> None:
             await send_due_emails()
         except Exception as e:
             record_error("sending appointment emails", e)
+        try:
+            await check_sent_emails()
+        except Exception as e:
+            record_error("checking appointment email delivery", e)
 
 
 @app.on_event("startup")
@@ -1600,7 +1634,7 @@ SCOPE_FOR = {"agent": "voice-ai-agents.readonly", "actions": "voice-ai-agent-goa
              "appointments": "calendars/events.write", "pipelines": "opportunities.readonly",
              "opportunities": "opportunities.write", "contact-appointments": "contacts.readonly",
              "chat": "conversation-ai.readonly and conversation-ai.write", "calendar-events": "calendars/events.readonly",
-             "email": "conversations/message.write"}
+             "email": "conversations/message.write (and conversations/message.readonly to see delivery)"}
 _check_cache: dict = {"ts": 0.0, "v": None}
 
 
@@ -1670,7 +1704,8 @@ async def booking_check(base: str) -> dict:
             step(label, False, _ghl_problem(area))
     if email_enabled():
         mails = [e for e in EVENTS if e["kind"] == "email"]
-        step("Appointment emails to the customer", (mails[-1]["status"] == "sent") if mails else None,
+        step("Appointment emails to the customer", ({"sent": True, "delivered": True, "read": True, "opened": True, "failed": False,
+                                                   "error": False}.get(mails[-1]["status"])) if mails else None,
              (mails[-1]["detail"] if mails else f"None sent yet. Sent from {email_from()} after the call, once an appointment is booked.")
              + ("" if not ghl.ERRORS.get("email") else f" | {_ghl_problem('email')}"))
 

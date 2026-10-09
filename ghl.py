@@ -242,15 +242,30 @@ async def send_email(contact_id: str, subject: str, html: str, email_from: str =
         body["emailFrom"] = email_from
     s, j = await _call("POST", "/conversations/messages", "2021-04-15", json=body)
     if s in (200, 201):
-        return {"id": j.get("emailMessageId") or j.get("messageId") or j.get("id") or "sent"}
+        return {"id": j.get("emailMessageId") or j.get("messageId") or j.get("id") or "sent", "messageId": j.get("messageId") or ""}
     first = _err(s, j)
     if email_from and s in (400, 422):
         body.pop("emailFrom")
         s2, j2 = await _call("POST", "/conversations/messages", "2021-04-15", json=body)
         if s2 in (200, 201):
-            return {"id": j2.get("emailMessageId") or j2.get("messageId") or j2.get("id") or "sent",
+            return {"id": j2.get("emailMessageId") or j2.get("messageId") or j2.get("id") or "sent", "messageId": j2.get("messageId") or "",
                     "note": f"sent from the account's default address, because GHL refused {email_from} ({first})"}
     return {"error": first}
+
+
+async def message_status(message_id: str) -> dict:
+    """GET /conversations/messages/{id} (scope: conversations/message.readonly): did the email really go out?
+    -> {"status": "delivered" | "sent" | "failed" | ..., "error": text} or {"status": "unknown", "error": why we could not ask}."""
+    s, j = await _call("GET", f"/conversations/messages/{message_id}", "2021-04-15")
+    if s != 200:
+        return {"status": "unknown", "error": _err(s, j)}
+    m = j.get("message") if isinstance(j.get("message"), dict) else j
+    meta = m.get("meta") if isinstance(m.get("meta"), dict) else {}
+    email = meta.get("email") if isinstance(meta.get("email"), dict) else {}
+    err = m.get("error") or m.get("errorMessage") or email.get("error") or email.get("errorMessage") or ""
+    if isinstance(err, dict):
+        err = err.get("message") or err.get("description") or str(err)
+    return {"status": str(m.get("status") or email.get("status") or "unknown").lower(), "error": str(err)[:300]}
 
 
 # ---------------------------------------------------------------- voice agent actions (tools the agent can use in a call)

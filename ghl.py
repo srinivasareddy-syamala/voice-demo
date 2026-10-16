@@ -55,6 +55,19 @@ async def upsert_contact(visitor: dict, company_name: str = "", website: str = "
     body = {k: v for k, v in body.items() if v}
     try:
         async with httpx.AsyncClient(timeout=20) as c:
+            # GHL's upsert REPLACES the contact's tags, which wiped tags the sales workflows rely on
+            # (outreach-sent, high priority ...). Read the existing contact's tags first and send them along.
+            try:
+                look = {"locationId": body["locationId"]}
+                if body.get("email"):
+                    look["email"] = body["email"]
+                else:
+                    look["number"] = body["phone"]
+                d = await c.get(f"{BASE}/contacts/search/duplicate", headers=_headers("2021-07-28"), params=look)
+                old = ((d.json() or {}).get("contact") or {}).get("tags") or [] if d.status_code == 200 else []
+                body["tags"] = list(dict.fromkeys([*old, *body["tags"]]))
+            except (httpx.HTTPError, ValueError) as e:
+                print("[ghl] could not read existing tags", e)
             r = await c.post(f"{BASE}/contacts/upsert", headers=_headers("2021-07-28"), json=body)
             if r.status_code >= 400 and "phone" in body and "phone" in r.text.lower():
                 # GHL rejects badly formatted phone numbers -> save without it (phone goes in the note)

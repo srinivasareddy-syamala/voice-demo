@@ -85,6 +85,29 @@ async def upsert_contact(visitor: dict, company_name: str = "", website: str = "
         return {"error": str(e)}
 
 
+async def fill_company_name(contact_id: str, company_name: str) -> bool:
+    """Sets the contact's Business Name (companyName) only if it is still empty - a name typed in the form or by the
+    sales team is never overwritten. Used when the visitor left "Company name" blank on the demo form.
+    GET + PUT /contacts/{id} (scope: contacts.readonly / contacts.write). Never raises."""
+    company_name = (company_name or "").strip()
+    if not (contact_id and company_name):
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.get(f"{BASE}/contacts/{contact_id}", headers=_headers("2021-07-28"))
+            if r.status_code != 200 or ((r.json() or {}).get("contact") or {}).get("companyName"):
+                return False
+            r = await c.put(f"{BASE}/contacts/{contact_id}", headers=_headers("2021-07-28"),
+                            json={"companyName": company_name[:200]})
+            if r.status_code >= 400:
+                print("[ghl] business name not saved", r.status_code, r.text[:200])
+                return False
+            return True
+    except (httpx.HTTPError, ValueError) as e:
+        print("[ghl] business name error", e)
+        return False
+
+
 async def add_note(contact_id: str, text: str) -> bool:
     """POST /contacts/{id}/notes (scope: contacts.write). Best effort."""
     if not contact_id:

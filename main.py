@@ -498,6 +498,10 @@ async def train(req: TrainRequest, request: Request):
                 if not ghl.configured():
                     return None
                 services = ", ".join(data["services"][:10]) or "-"
+                saved = await guarded("saving the contact", contact_task, None)
+                if not req.company.strip() and isinstance(saved, dict) and saved.get("id"):
+                    # "Company name" was left empty on the form: use the name read from their website
+                    await ghl.fill_company_name(saved["id"], data.get("company_name") or "")
                 return await note(
                     f"Pragna AI voice demo request\n\n{form_lines}\n\n"
                     f"Scraped company: {data['company_name']} ({data['website']})\n"

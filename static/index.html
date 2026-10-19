@@ -562,6 +562,26 @@ COUNTRIES.forEach(([flag, iso, code], i) => {
 });
 $("consent").addEventListener("change", e => { $("submitBtn").disabled = !e.target.checked; });
 
+/* ---------- came from the outreach email (demo.pragna.ai/?c={{contact.id}}): fill in what we already know ---------- */
+(async () => {
+  const q = new URLSearchParams(location.search), c = q.get("c") || "";
+  if (!/^[A-Za-z0-9]{15,40}$/.test(c)) return;
+  q.delete("c");                                          // keep the id out of the address bar (and out of shared links)
+  history.replaceState(null, "", location.pathname + (q.toString() ? "?" + q : "") + location.hash);
+  try {
+    const r = await fetch("/api/prefill?c=" + encodeURIComponent(c));
+    if (!r.ok) return;
+    const d = await r.json();
+    const put = (id, v) => { if (v && !$(id).value.trim()) $(id).value = v; };
+    put("name", d.name); put("company", d.company); put("website", d.website); put("email", d.email);
+    const p = (d.phone || "").replace(/[^\d+]/g, "");
+    if (p && !$("phone").value.trim()) {
+      const code = p.startsWith("+") && COUNTRIES.map(x => x[2]).filter(k => p.startsWith(k)).sort((a, b) => b.length - a.length)[0];
+      if (code) { $("cc").value = code; $("phone").value = p.slice(code.length); } else $("phone").value = p.replace(/^\+/, "");
+    }
+  } catch (e) { /* the visitor can still fill the form in by hand */ }
+})();
+
 /* ---------- "Potential Revenue at Risk" calculator: calls x job value x conversion rate ---------- */
 function riskCalc(){
   const num = v => parseFloat(String(v).replace(/[^0-9.]/g, "")) || 0;

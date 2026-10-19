@@ -396,6 +396,23 @@ def config():
     }
 
 
+@app.get("/api/prefill")
+async def prefill(c: str = ""):
+    """The outreach email links to demo.pragna.ai/?c={{contact.id}}: return what we already know about that contact so
+    the form is filled in for them, and tag them demo-viewed (the PRAGNA pipeline moves the card to Demo Viewed)."""
+    if not (ghl.configured() and re.fullmatch(r"[A-Za-z0-9]{15,40}", c)):
+        return JSONResponse({}, headers={"Cache-Control": "no-store"})
+    contact = await ghl.get_contact(c)
+    if not contact:
+        return JSONResponse({}, headers={"Cache-Control": "no-store"})
+    asyncio.create_task(ghl.add_tags(c, ["demo-viewed"]))
+    name = (contact.get("contactName") or " ".join(x for x in (contact.get("firstName"), contact.get("lastName")) if x) or "").strip()
+    data = {"name": name.title() if name.islower() else name, "email": contact.get("email") or "",
+            "phone": contact.get("phone") or "", "company": contact.get("companyName") or "",
+            "website": contact.get("website") or ""}
+    return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
 async def _read_site(req: TrainRequest) -> dict:
     data = await scrape_company(req.website, req.company)
     if not (data["about"] or data["services"] or data["highlights"] or data["description"]):

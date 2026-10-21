@@ -566,6 +566,7 @@ fetch(API + "/api/config").then(r => r.json()).then(c => {
     const o = document.createElement("option"); o.value = key; o.textContent = (icon ? icon + "  " : "") + label;
     $("industry").appendChild(o);
   });
+  if ([...$("industry").options].some(o => o.value === "gardening")) $("industry").value = "gardening";   // default choice
 }).catch(() => {});
 
 /* ---------- the form now sits on the page (no pop-up) ---------- */

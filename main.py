@@ -24,7 +24,7 @@ load_dotenv(".env.example")   # otherwise use the values in .env.example
 
 import ghl  # noqa: E402
 from persona import (ACTION_BOOK, ACTION_CANCEL, ACTION_CHANGE, ACTION_SLOTS,  # noqa: E402
-                     build_agent_prompt, build_chat_agent, build_sample_profile, build_welcome, industry_list,
+                     build_agent_prompt, build_chat_agent, build_chat_agent_multi, build_sample_profile, build_welcome, industry_list,
                      sample_page, INDUSTRIES)
 from scraper import mobile_preview, scrape_company  # noqa: E402
 
@@ -98,6 +98,43 @@ def _free_line(line: dict) -> None:
     line.update(ticket="", ref="", since=0.0)
 
 
+# Each line only works if its chat widget's "Chat with Voice" calls the line's OWN agent. If a widget points at another
+# line's agent, two visitors end up talking to the same agent and hear each other's company. Such a line is not used.
+WIDGET_AGENT: dict[str, dict] = {}     # widget id -> {"agent": agent id ("" none, None unknown), "ts": when read}
+
+
+async def refresh_widget_agents(force: bool = False) -> None:
+    """Read which agent each line's widget really calls, and give the line THAT agent (the visitor's company must be
+    written into the agent their widget talks to). If two widgets call the same agent, only the first line is used."""
+    now = time.time()
+    changed = False
+    for line in LINES:
+        w = WIDGET_AGENT.get(line["widget"])
+        if force or not w or now - w["ts"] > 300:
+            WIDGET_AGENT[line["widget"]] = {"agent": await ghl.widget_voice_agent(line["widget"]), "ts": now}
+            changed = True
+    if not changed:
+        return
+    taken: set[str] = set()
+    for line in LINES:
+        calls = WIDGET_AGENT[line["widget"]]["agent"]
+        if calls and re.fullmatch(r"[0-9a-fA-F]{24}", calls) and calls not in taken and calls != line["agent"]:
+            busy_with = next((l for l in LINES if l is not line and l["agent"] == calls and _line_busy(l, now)), None)
+            if not busy_with and not _line_busy(line, now):
+                print(f"[lines] widget {line['widget']} calls agent {calls}: line now uses that agent (was {line['agent']})")
+                line["agent"] = calls
+        if calls:
+            taken.add(calls)
+
+
+def line_ok(line: dict) -> bool:
+    agent = (WIDGET_AGENT.get(line["widget"]) or {}).get("agent")
+    if agent is None:                                        # not known yet: assume it is set up right
+        return True
+    first = next((l for l in LINES if (WIDGET_AGENT.get(l["widget"]) or {}).get("agent") == agent), line)
+    return agent == line["agent"] and first is line         # its own agent, not shared with an earlier line
+
+
 def acquire_line(ticket: str) -> tuple[dict | None, int, int]:
     """A line for this visitor -> (line, 0, 0), or (None, place in the queue, rough seconds to wait)."""
     now = time.time()
@@ -109,9 +146,10 @@ def acquire_line(ticket: str) -> tuple[dict | None, int, int]:
     w = WAITING.setdefault(ticket, {"ts": now, "seen": now})
     w["seen"] = now
     place = sorted(WAITING, key=lambda t: WAITING[t]["ts"]).index(ticket)
-    free = sorted([l for l in LINES if not _line_busy(l, now)], key=lambda l: l["since"])
+    pool = [l for l in LINES if line_ok(l)] or LINES[:1]     # a mis-wired widget's line is left out
+    free = sorted([l for l in pool if not _line_busy(l, now)], key=lambda l: l["since"])
     # with somebody waiting, a visitor who has had the line for LINE_HOLD seconds gives it up
-    overdue = sorted([l for l in LINES if l not in free and l["ref"] and now - l["since"] > LINE_HOLD], key=lambda l: l["since"])
+    overdue = sorted([l for l in pool if l not in free and l["ref"] and now - l["since"] > LINE_HOLD], key=lambda l: l["since"])
     available = free + overdue
     if place < len(available):
         line = available[place]
@@ -120,7 +158,7 @@ def acquire_line(ticket: str) -> tuple[dict | None, int, int]:
         WAITING.pop(ticket, None)
         return line, 0, 0
     behind = place - len(available)                          # how many lines must come free before it is my turn
-    left = sorted(max(0.0, LINE_HOLD - (now - l["since"])) for l in LINES if l not in available)
+    left = sorted(max(0.0, LINE_HOLD - (now - l["since"])) for l in pool if l not in available)
     wait = (left[behind % len(left)] if left else 0) + (behind // max(len(left), 1)) * LINE_HOLD
     return None, place + 1, int(wait)
 
@@ -557,7 +595,7 @@ async def train(req: TrainRequest, request: Request):
             agent_status, contact, preview, chat_status = await asyncio.gather(
                 update_agent(), guarded("contact note", save_contact(), None),
                 guarded("phone preview", asyncio.sleep(0, {}) if no_site else mobile_preview(data["website"]), {}),
-                guarded("chat bot", update_chat_bot(data, visitor), "error: see the check page"))
+                guarded("chat bot", update_chat_bot(data, visitor, line), "error: see the check page"))
             lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
             lead["seen"] = time.time()
             save_state()
@@ -1456,6 +1494,10 @@ async def _sync_loop() -> None:
     while True:
         await asyncio.sleep(40)
         try:
+            await refresh_widget_agents()
+        except Exception as e:
+            record_error("checking which agent each chat widget calls", e)
+        try:
             await sync_bookings()
         except Exception as e:                              # never let the loop die
             record_error("reading the calendar for chat bookings", e)
@@ -1471,6 +1513,7 @@ async def _sync_loop() -> None:
 
 @app.on_event("startup")
 async def _start_sync() -> None:
+    bg(refresh_widget_agents(force=True))
     bg(_sync_loop())
 
 
@@ -1530,10 +1573,16 @@ async def chat_bot(force: bool = False) -> tuple[dict, str]:
     return st["bot"], ""
 
 
-async def update_chat_bot(data: dict, visitor: dict) -> str:
-    """Write this visitor's company into the chat bot and make sure it can book. -> "updated", "off" or "error: ..."."""
+async def update_chat_bot(data: dict, visitor: dict, line: dict | None = None) -> str:
+    """Write this visitor's company into the chat bot and make sure it can book. -> "updated", "off" or "error: ...".
+    GHL has ONE chat bot for the account: when other visitors are using the demo at the same time, the bot gets every
+    current business and asks each chatter which one they are from (otherwise it would talk about the newest only)."""
     if not chat_enabled():
         return "off"
+    if line is not None:
+        line["chat"] = (data, {"name": visitor.get("name", "")})
+    now = time.time()
+    others = [l["chat"] for l in LINES if l is not line and l.get("chat") and _line_busy(l, now)]
     async with _chat_lock:
         st = STATE.setdefault("chat", {})
         bot, problem = await chat_bot()
@@ -1546,8 +1595,10 @@ async def update_chat_bot(data: dict, visitor: dict) -> str:
         res, limits = {}, [st.get("limit") or 0, 4000, 2800, 1900, 1200]     # 0 = everything; GHL may allow less
         while limits:
             limit = limits.pop(0)
-            body = {**build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit),
-                    "businessName": data["company_name"][:80], "mode": "auto-pilot",
+            text = (build_chat_agent_multi([(data, visitor)] + others, bool(cfg["calendarId"]), limit or 6000) if others
+                    else build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit))
+            body = {**text, "businessName": (f"{os.getenv('BRAND_NAME', 'Pragna AI')} demo" if others else data["company_name"])[:80],
+                    "mode": "auto-pilot",
                     "autoPilotMaxMessages": max(int(bot.get("autoPilotMaxMessages") or 0)
                                                 if str(bot.get("autoPilotMaxMessages") or "0").isdigit() else 0, 50)}
             if not bot:                                     # no bot in this account yet: make one for the demo
@@ -1800,9 +1851,19 @@ async def booking_check(base: str) -> dict:
                  "GHL accepted send-only actions: the agent sends the request but does not hear the result."))
         debug_actions[line["agent"]] = [{k: x.get(k) for k in ("name", "type", "method", "url", "keys", "paramKeys")} | {"hasId": bool(x.get("id"))}
                                         for x in on_agent or []]
+    await guarded("check: which agent each chat widget calls", refresh_widget_agents(force=True), None)
+    for i, line in enumerate(LINES, 1):
+        tag = f"Line {i}: " if len(LINES) > 1 else ""
+        calls = (WIDGET_AGENT.get(line["widget"]) or {}).get("agent")
+        step(tag + "its chat widget calls this line's own voice agent", None if calls is None else calls == line["agent"],
+             "Could not read the widget's settings from GHL." if calls is None else
+             f"widget {line['widget']} -> agent {line['agent']}" if calls == line["agent"] else
+             (f"Widget {line['widget']} calls agent {calls or '(none)'} instead of {line['agent']}. Two visitors would hear the "
+              f"same company, so this line is NOT used. Fix: GHL > Sites > Chat Widget > this widget > Voice AI agent."))
     now = time.time()
     step("Lines for visitors", True, " | ".join(
-        f"Line {i}: " + (f"busy for {int((now - l['since']) // 60)} min" if _line_busy(l, now) else "free") for i, l in enumerate(LINES, 1))
+        f"Line {i}: " + ("NOT USED (widget calls another agent)" if not line_ok(l) else
+                         f"busy for {int((now - l['since']) // 60)} min" if _line_busy(l, now) else "free") for i, l in enumerate(LINES, 1))
         + f" | waiting: {len(WAITING)} | a visitor keeps a line up to {LINE_HOLD // 60} min when others are waiting")
 
     _bcfg["ts"] = 0.0

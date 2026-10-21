@@ -24,7 +24,8 @@ load_dotenv(".env.example")   # otherwise use the values in .env.example
 
 import ghl  # noqa: E402
 from persona import (ACTION_BOOK, ACTION_CANCEL, ACTION_CHANGE, ACTION_SLOTS,  # noqa: E402
-                     build_agent_prompt, build_chat_agent, build_welcome)
+                     build_agent_prompt, build_chat_agent, build_sample_profile, build_welcome, industry_list,
+                     sample_page, INDUSTRIES)
 from scraper import mobile_preview, scrape_company  # noqa: E402
 
 # The chat + call widget shown inside the phone preview. Fixed in code on purpose: an old
@@ -133,7 +134,10 @@ class TrainRequest(BaseModel):
     email: str = ""
     phone: str = ""
     company: str = ""
-    website: str
+    website: str = ""     # empty = "I don't have a website": then industry (+ town, services) is used instead
+    industry: str = ""    # key of persona.INDUSTRIES, for a business without a website
+    town: str = ""
+    services: str = ""
     consent: bool = False
     tz: str = ""          # visitor's timezone from the browser, e.g. Europe/London (used for appointments)
     ticket: str = ""      # the page's id for this visitor; the same one is sent again while waiting for a free line
@@ -393,6 +397,7 @@ def config():
         "ghlConfigured": ghl.configured(),
         "booking": booking_enabled(),
         "lines": len(LINES),
+        "industries": industry_list(),       # for "I don't have a website"
     }
 
 
@@ -413,6 +418,13 @@ async def prefill(c: str = ""):
     return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
 
+async def _sample_site(req: TrainRequest, ticket: str) -> dict:
+    """No website: a profile and a one-page sample site built from their type of business."""
+    data = build_sample_profile(req.industry, req.company, req.town, req.services, ticket)
+    data["_home_html"], data["_home_url"], data["_rendered"] = sample_page(data), data["website"], False
+    return data
+
+
 async def _read_site(req: TrainRequest) -> dict:
     data = await scrape_company(req.website, req.company)
     if not (data["about"] or data["services"] or data["highlights"] or data["description"]):
@@ -425,8 +437,14 @@ async def train(req: TrainRequest, request: Request):
     t0 = time.time()
     if not req.consent:
         raise HTTPException(400, "Please tick the consent box to continue.")
+    no_site = not req.website.strip()
+    if no_site and req.industry not in INDUSTRIES:
+        raise HTTPException(400, "Please enter your website, or tick \"I don't have a website\" and choose your type of business.")
+    if no_site and not req.company.strip():
+        raise HTTPException(400, "Please enter your company name.")
     visitor = req.model_dump()
     ticket = re.sub(r"[^A-Za-z0-9]", "", req.ticket)[:40] or secrets.token_hex(8)
+    label = INDUSTRIES.get(req.industry, INDUSTRIES["other"])[0]
 
     # 1) the first time we hear from this visitor: save the form to GHL straight away (the lead is kept even if
     #    the website can't be read or they give up waiting) and start reading their website
@@ -436,9 +454,12 @@ async def train(req: TrainRequest, request: Request):
             JOBS.pop(t, None)
         job = JOBS[ticket] = {
             "ts": t0, "lock": asyncio.Lock(),
-            "consent": "Consent to use public website content for the demo: YES (" + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")",
-            "contact": asyncio.create_task(ghl.upsert_contact(visitor, req.company, req.website) if ghl.configured() else asyncio.sleep(0)),
-            "site": asyncio.create_task(_read_site(req))}
+            "consent": ("Consent to use the details given for the demo: YES (" if no_site else
+                        "Consent to use public website content for the demo: YES (") + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")",
+            "contact": asyncio.create_task(ghl.upsert_contact(visitor, req.company, req.website,
+                                                              ["voice-ai-demo", "no-website"] if no_site else None)
+                                           if ghl.configured() else asyncio.sleep(0)),
+            "site": asyncio.create_task(_sample_site(req, ticket) if no_site else _read_site(req))}
     contact_task = job["contact"]
 
     async def note(text: str):
@@ -448,7 +469,10 @@ async def train(req: TrainRequest, request: Request):
         return contact
 
     form_lines = (f"Name: {req.name}\nEmail: {req.email or '-'}\nPhone: {req.phone or '-'}\n"
-                  f"Company: {req.company or '-'}\nWebsite: {req.website}\n{job['consent']}")
+                  f"Company: {req.company or '-'}\n"
+                  + (f"Website: NONE - sample demo for type of business: {label}\nTown: {req.town or '-'}\n"
+                     f"Services given: {req.services or '-'}\n" if no_site else f"Website: {req.website}\n")
+                  + job["consent"])
 
     async def site_failed(e: Exception):
         JOBS.pop(ticket, None)
@@ -477,11 +501,11 @@ async def train(req: TrainRequest, request: Request):
             # keep the homepage we fetched so the phone can show the live site
             home_html, home_url, rendered = data.pop("_home_html", None), data.pop("_home_url", None), data.pop("_rendered", False)
             if home_html:
-                site_typed = req.website.strip() if "://" in req.website else "https://" + req.website.strip()
+                site_typed = "" if no_site else req.website.strip() if "://" in req.website else "https://" + req.website.strip()
                 cache_page([site_typed, home_url, data["website"]], home_html, home_url or data["website"], rendered)
 
             # remember this lead so the agent (or the button on the page) can book an appointment for them
-            lead = new_lead(visitor, data["company_name"], data["website"])
+            lead = new_lead(visitor, data["company_name"], "" if no_site else data["website"])
             lead.update(agent=line["agent"], widget=line["widget"], seen=time.time())
             line["ref"] = lead["ref"]
             # this line's agent has its booking actions (first run creates them in GHL); free appointment times go
@@ -519,6 +543,9 @@ async def train(req: TrainRequest, request: Request):
                 if not req.company.strip() and isinstance(saved, dict) and saved.get("id"):
                     # "Company name" was left empty on the form: use the name read from their website
                     await ghl.fill_company_name(saved["id"], data.get("company_name") or "")
+                if no_site:
+                    return await note(f"Pragna AI voice demo request - NO WEBSITE (sample for {label})\n\n{form_lines}\n\n"
+                                      f"Lead for a website too: the visitor said they do not have one.")
                 return await note(
                     f"Pragna AI voice demo request\n\n{form_lines}\n\n"
                     f"Scraped company: {data['company_name']} ({data['website']})\n"
@@ -529,7 +556,7 @@ async def train(req: TrainRequest, request: Request):
 
             agent_status, contact, preview, chat_status = await asyncio.gather(
                 update_agent(), guarded("contact note", save_contact(), None),
-                guarded("phone preview", mobile_preview(data["website"]), {}),
+                guarded("phone preview", asyncio.sleep(0, {}) if no_site else mobile_preview(data["website"]), {}),
                 guarded("chat bot", update_chat_bot(data, visitor), "error: see the check page"))
             lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
             lead["seen"] = time.time()
@@ -544,6 +571,8 @@ async def train(req: TrainRequest, request: Request):
                 "company": {k: data[k] for k in ("company_name", "website", "description", "services",
                                                  "hours", "address", "emails", "phones", "socials", "pages_scraped")},
                 "faqCount": len(data["faqs"]),
+                "sample": no_site,
+                "industry": label if no_site else "",
                 "welcomeMessage": welcome,
                 "promptPreview": prompt[:1500],
                 "promptChars": len(prompt),

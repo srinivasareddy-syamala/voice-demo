@@ -40,6 +40,13 @@
   select.cc:focus{border-color:var(--blue2);box-shadow:0 0 0 4px #3396F51f}
   .consent{display:flex;gap:10px;align-items:flex-start;margin:18px 0 0;font-size:12px;font-weight:500;color:var(--muted);line-height:1.55;cursor:pointer}
   .consent input{width:18px;height:18px;margin:2px 0 0;flex:none;padding:0;accent-color:var(--blue);cursor:pointer}
+  /* "I don't have a website" */
+  .nosite-tick{display:flex;gap:8px;align-items:center;margin:8px 0 0;font-size:13px;font-weight:600;color:var(--navy);cursor:pointer}
+  .nosite-tick input{width:17px;height:17px;margin:0;flex:none;padding:0;accent-color:var(--blue);cursor:pointer}
+  #nosite{border:1px dashed var(--line);border-radius:12px;padding:4px 12px 12px;margin-top:10px;background:#F8FAFC}
+  #nosite p{margin:8px 0 0;font-size:12px;color:var(--muted);line-height:1.45}
+  select.ind{width:100%;padding:14px;border-radius:12px;border:1px solid var(--line);background:#fff;color:var(--navy);font:500 16px "Plus Jakarta Sans",sans-serif;outline:none}
+  select.ind:focus{border-color:var(--blue2);box-shadow:0 0 0 4px #3396F51f}
   .err{color:var(--err);font-size:14px;margin-top:12px;display:none;line-height:1.45}
   /* form sheet */
   .sheet-bg{position:fixed;inset:0;background:#0f172a66;backdrop-filter:blur(4px);z-index:60;display:flex;align-items:flex-end;justify-content:center}
@@ -406,12 +413,22 @@
         <div class="fields">
           <div><label for="name">Your name *</label>
             <input id="name" name="name" required placeholder="James Smith" autocomplete="name"></div>
-          <div><label for="company">Company name</label>
+          <div><label for="company">Company name<span id="companyStar" class="hidden"> *</span></label>
             <input id="company" name="company" placeholder="Smith &amp; Sons Ltd" autocomplete="organization"></div>
-          <div><label for="website">Company website *</label>
-            <input id="website" name="website" required inputmode="url" placeholder="www.yourcompany.co.uk" autocomplete="url"></div>
+          <div><label for="website">Company website <span id="websiteStar">*</span></label>
+            <input id="website" name="website" inputmode="url" placeholder="www.yourcompany.co.uk" autocomplete="url">
+            <label class="nosite-tick" for="noSite"><input type="checkbox" id="noSite"> I don't have a website</label></div>
           <div><label for="email">Email *</label>
             <input id="email" name="email" type="email" required placeholder="james@yourcompany.co.uk" autocomplete="email"></div>
+        </div>
+        <div id="nosite" class="hidden">
+          <label for="industry">Type of business *</label>
+          <select class="ind" id="industry" name="industry"><option value="">Choose your type of business…</option></select>
+          <label for="town">Town / area</label>
+          <input id="town" name="town" placeholder="e.g. Aylesbury" autocomplete="address-level2">
+          <label for="services">Main services (optional)</label>
+          <input id="services" name="services" placeholder="e.g. boiler repairs, bathroom fitting">
+          <p>No website? No problem — we'll build a sample page and an AI receptionist for your type of business.</p>
         </div>
         <label for="phone">Phone</label>
         <div class="phone-row">
@@ -420,7 +437,7 @@
         </div>
         <label class="consent" for="consent">
           <input type="checkbox" id="consent" name="consent" required>
-          <span>I understand and agree that PRAGNA AI may temporarily use publicly available content from my business website — such as text, business information, branding and website screenshots — solely to create and display a personalised AI demonstration. The demo is for illustration purposes only, is not a live production service, and the personalised demo page/link will expire after the demonstration period.</span>
+          <span>I understand and agree that PRAGNA AI may temporarily use the details I give here and publicly available content from my business website (if I have one) — such as text, business information, branding and website screenshots — solely to create and display a personalised AI demonstration. The demo is for illustration purposes only, is not a live production service, and the personalised demo page/link will expire after the demonstration period.</span>
         </label>
         <button class="btn" id="submitBtn" type="submit" disabled>Build my AI Receptionist →</button>
         <div class="err" id="err"></div>
@@ -543,7 +560,13 @@ const txt = (el, s) => { el.textContent = s; return el; };
 let CFG = {widgetId: DEFAULT_WIDGET_ID, agentPhone: "", whatsapp: "+44 7446 952720",
            thumPrefix: "https://image.thum.io/get/width/600/crop/1500/noanimate/"};
 let SITE = "";
-fetch(API + "/api/config").then(r => r.json()).then(c => CFG = {...CFG, ...c, widgetId: c.widgetId || DEFAULT_WIDGET_ID}).catch(() => {});
+fetch(API + "/api/config").then(r => r.json()).then(c => {
+  CFG = {...CFG, ...c, widgetId: c.widgetId || DEFAULT_WIDGET_ID};
+  (CFG.industries || []).forEach(([key, label, icon]) => {   // "I don't have a website": types of business
+    const o = document.createElement("option"); o.value = key; o.textContent = (icon ? icon + "  " : "") + label;
+    $("industry").appendChild(o);
+  });
+}).catch(() => {});
 
 /* ---------- the form now sits on the page (no pop-up) ---------- */
 const openSheet = () => $("form").scrollIntoView({behavior: "smooth", block: "center"});
@@ -561,6 +584,20 @@ COUNTRIES.forEach(([flag, iso, code], i) => {
   $("cc").appendChild(o);
 });
 $("consent").addEventListener("change", e => { $("submitBtn").disabled = !e.target.checked; });
+
+/* ---------- "I don't have a website": type of business instead ---------- */
+function setNoSite(on){
+  $("noSite").checked = on;
+  $("website").disabled = on;
+  if (on) $("website").value = "";
+  $("website").placeholder = on ? "No website – that's fine" : "www.yourcompany.co.uk";
+  $("websiteStar").classList.toggle("hidden", on);
+  $("companyStar").classList.toggle("hidden", !on);
+  $("nosite").classList.toggle("hidden", !on);
+  $("industry").required = on;
+  $("company").required = on;
+}
+$("noSite").addEventListener("change", e => setNoSite(e.target.checked));
 
 /* ---------- came from the outreach email (demo.pragna.ai/?c={{contact.id}}): fill in what we already know ---------- */
 (async () => {
@@ -623,14 +660,21 @@ $("form").addEventListener("submit", async e => {
   e.preventDefault();
   $("err").style.display = "none";
   if (!$("consent").checked) { $("err").textContent = "Please tick the consent box to continue."; $("err").style.display = "block"; return; }
+  const noSite = $("noSite").checked;
+  const showErr = m => { $("err").textContent = m; $("err").style.display = "block"; };
+  if (!noSite && !$("website").value.trim()) return showErr("Please enter your website, or tick \"I don't have a website\".");
+  if (noSite && !$("industry").value) return showErr("Please choose your type of business.");
+  if (noSite && !$("company").value.trim()) return showErr("Please enter your company name.");
   const body = Object.fromEntries(new FormData(e.target).entries());
+  body.website = noSite ? "" : (body.website || "");
+  if (!noSite) { delete body.industry; delete body.town; delete body.services; }
   const national = (body.phone || "").replace(/[^\d]/g, "").replace(/^0+/, "");   // 07700 900123 -> 7700900123
   body.phone = national ? body.cc + national : "";
   delete body.cc;
   body.consent = true;
   try { body.tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { body.tz = ""; }
-  SITE = /^https?:\/\//i.test(body.website.trim()) ? body.website.trim() : "https://" + body.website.trim();
-  if (!CFG.ownScreenshots) new Image().src = CFG.thumPrefix + SITE;   // no own screenshots on this server: warm up thum.io
+  SITE = noSite ? "" : /^https?:\/\//i.test(body.website.trim()) ? body.website.trim() : "https://" + body.website.trim();
+  if (SITE && !CFG.ownScreenshots) new Image().src = CFG.thumPrefix + SITE;   // no own screenshots on this server: warm up thum.io
   closeSheet(); $("landing").classList.add("hidden"); $("progress").classList.remove("hidden");
   window.scrollTo(0, 0);
   const prog = runProgress(PROGRESS_SECONDS);
@@ -671,7 +715,7 @@ $("form").addEventListener("submit", async e => {
 
 function showCompany(d){
   const c = d.company;
-  const host = new URL(c.website).hostname.replace(/^www\./, "");
+  const host = d.sample ? "sample website" : new URL(c.website).hostname.replace(/^www\./, "");
   txt($("urlText"), host);
   txt($("infoCompany"), c.company_name);
   txt($("pillCompany"), c.company_name);

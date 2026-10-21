@@ -41,7 +41,7 @@ DEFAULT_WIDGET_ID = WIDGET_ID
 # the pair below - or put all pairs in .env as  GHL_LINES=agentId:widgetId,agentId:widgetId
 DEFAULT_LINES = [(os.getenv("GHL_AGENT_ID") or "6abdf3955deba8d1c1f3ac30", WIDGET_ID),
                  ("6ac51060e7267112e69b5de7", "6ac51135f1d5945734fe5e9f")]
-LINE_HOLD = int(os.getenv("LINE_HOLD_SECONDS", "420"))     # with people waiting, a visitor keeps a line this long
+LINE_HOLD = int(os.getenv("LINE_HOLD_SECONDS", "540"))     # with people waiting, a visitor keeps a line this long
 LINE_GRACE = int(os.getenv("LINE_GRACE_SECONDS", "90"))    # no sign of life from the page for this long = they left
 
 
@@ -1450,11 +1450,14 @@ async def update_chat_bot(data: dict, visitor: dict) -> str:
         while limits:
             limit = limits.pop(0)
             body = {**build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit),
-                    "businessName": data["company_name"][:80], "mode": "auto-pilot", "channels": CHAT_CHANNELS,
+                    "businessName": data["company_name"][:80], "mode": "auto-pilot",
                     "autoPilotMaxMessages": max(int(bot.get("autoPilotMaxMessages") or 0)
                                                 if str(bot.get("autoPilotMaxMessages") or "0").isdigit() else 0, 50)}
             if not bot:                                     # no bot in this account yet: make one for the demo
-                body.update(name=CHAT_BOT_NAME, isPrimary=True, waitTime=2, waitTimeUnit="seconds", sleepEnabled=False)
+                body.update(name=CHAT_BOT_NAME, isPrimary=True, waitTime=2, waitTimeUnit="seconds", sleepEnabled=False,
+                            channels=CHAT_CHANNELS)
+            # an existing bot keeps its channels: sending them again switches off "Primary bot" for Live Chat
+            # (set in GHL), and a bot that is not primary never answers the widget's chat
             res = await ghl.save_chat_agent(bot.get("id", ""), body)
             if res.get("id"):
                 st["limit"] = limit                         # remember what fitted
@@ -1746,6 +1749,12 @@ async def booking_check(base: str) -> dict:
                  cst.get("error") or f"{bot.get('name')} | mode: {bot.get('mode')} | channels: {chans}"
                  + (" | company text last written " + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(cst["updated"])) if cst.get("updated") else
                     " | the company text is written when the form is submitted"))
+            not_primary = [_channel_label(c) for c in (bot.get("channels") or [])
+                           if isinstance(c, dict) and c.get("isPrimary") is False]
+            step("Text chat: the chat bot is the primary bot for the website chat", not not_primary,
+                 ("Not primary for: " + ", ".join(not_primary) + ". GHL only hands a chat to the primary bot - open AI Agents > "
+                  "Conversation AI > " + str(bot.get("name")) + " and set it as Primary for Live Chat.") if not_primary
+                 else "Primary for the widget's chat")
             if cst.get("updated"):
                 step("Text chat: the chat bot can book, change and cancel appointments", bool(cst.get("action")) and not cst.get("actionError"),
                      cst.get("actionError") or ("Appointment booking is switched on" if cst.get("action") else "Checked on the next form submission"))

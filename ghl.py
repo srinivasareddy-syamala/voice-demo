@@ -1,5 +1,6 @@
 """GoHighLevel (LeadConnector) API v2 client: Voice AI agent + its actions, contacts, calendar, opportunities."""
 import os
+import re
 import time
 
 import httpx
@@ -242,6 +243,25 @@ async def calendar_events(calendar_id: str, start_ms: int, end_ms: int) -> list[
                        params={"locationId": os.environ["GHL_LOCATION_ID"], "calendarId": calendar_id,
                                "startTime": start_ms, "endTime": end_ms})
     return [e for e in (j.get("events") or []) if isinstance(e, dict)] if s == 200 else None
+
+
+async def widget_voice_agent(widget_id: str) -> str | None:
+    """Which Voice AI agent this chat widget's "Chat with Voice" calls (its public config, as the widget itself reads
+    it). -> agent id, "" when the widget has no voice agent, None when it could not be read."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{BASE}/chat-widget/public/config/{widget_id}")
+        if r.status_code != 200:
+            return None
+        text = r.text.replace('\\"', '"').replace("\\\\", "\\").replace('\\"', '"')
+        i = text.find("voice-ai-agent")
+        if i < 0:
+            return ""
+        m = re.search(r'"agentId"\s*:\s*"([0-9a-fA-F]{24})"', text[i:i + 600])
+        return m.group(1) if m else ""
+    except (httpx.HTTPError, ValueError) as e:
+        print("[ghl] widget config error", e)
+        return None
 
 
 async def reassign_appointment(event_id: str, contact_id: str) -> bool:

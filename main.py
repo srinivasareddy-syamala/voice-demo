@@ -1217,6 +1217,73 @@ async def current_booking(lead: dict) -> dict | None:
     return lead["booking"]
 
 
+# The chat bot books on the chat's own guest contact ("Guest Visitor Abcde", or the name typed in the chat), which
+# has no email: no confirmation or reschedule email can reach the visitor, this server does not see the booking,
+# and the "booked" workflow makes a second card for the guest. So: a chat booking on a contact WITHOUT an email,
+# made while a demo visitor is active, is moved onto that visitor's real contact (made from the demo form), and the
+# guest's cards are removed. sync_bookings() then treats it like any booking: email, card moved, note.
+GUESTS: dict[str, float] = {}          # guest contact id -> when its booking was moved (its cards are tidied for a while)
+CHAT_GUEST_WINDOW = 1800               # a chat booking belongs to the visitor active in the last 30 minutes
+
+
+def _norm_name(s: str) -> str:
+    return re.sub(r"[^a-z]", "", (s or "").lower())
+
+
+async def _adopt_guest_bookings(newest: dict[str, dict]) -> None:
+    cfg = await booking_config()
+    if not cfg["calendarId"]:
+        return
+    now = time.time()
+    active = sorted([l for l in newest.values() if now - max(l.get("ts", 0), l.get("seen", 0)) < CHAT_GUEST_WINDOW],
+                    key=lambda l: -max(l.get("ts", 0), l.get("seen", 0)))
+    # cards the "booked" workflow made for guests we already moved (it can fire a minute or two later)
+    for gid, t in list(GUESTS.items()):
+        if now - t > 900:
+            GUESTS.pop(gid, None)
+            continue
+        for o in (await ghl.contact_opportunities(gid)) or []:
+            if o.get("pipelineId") == cfg["pipelineId"] and await ghl.delete_opportunity(o["id"]):
+                log_event("book", "server", "tidied", f"Removed the duplicate card '{o.get('name', '')}' of a chat guest")
+    if not active:
+        return
+    events = await ghl.calendar_events(cfg["calendarId"], int((now - 3600) * 1000), int((now + 62 * 86400) * 1000))
+    for ev in events or []:
+        cid = ev.get("contactId") or ""
+        if (not ev.get("id") or not cid or cid in newest or ev.get("deleted")
+                or _event_state(ev) in ("cancelled", "invalid")
+                or ((ev.get("createdBy") or {}).get("source") or "conversations_ai") != "conversations_ai"):
+            continue
+        added = _parse_when(ev.get("dateAdded", ""), timezone.utc)
+        if not added or now - added.timestamp() > CHAT_GUEST_WINDOW:
+            continue
+        guest = await ghl.get_contact(cid)
+        if not guest or guest.get("email"):                # a real contact with an email: GHL emails them itself
+            continue
+        gname = _norm_name(f"{guest.get('firstName') or ''}{guest.get('lastName') or ''}")
+        by_name = [l for l in active if gname and _norm_name(l.get("name", "")) == gname]
+        if by_name:
+            lead = by_name[0]
+        elif len(active) == 1 or max(active[0].get("ts", 0), active[0].get("seen", 0)) - \
+                max(active[1].get("ts", 0), active[1].get("seen", 0)) > 600:
+            lead = active[0]                               # only one visitor recently (or clearly the latest)
+        else:
+            log_event("book", "server", "not linked", "A chat booking on a guest contact could not be matched: "
+                                                      "two demo visitors were active at the same time")
+            continue
+        if added.timestamp() < lead.get("ts", 0) - 300:    # booked before this visitor's demo: not theirs
+            continue
+        if await ghl.reassign_appointment(ev["id"], lead["contactId"]):
+            GUESTS[cid] = now
+            log_event("book", "server", "linked", f"Chat booking moved from the chat guest contact to "
+                                                  f"{lead.get('company') or '-'} ({lead.get('name') or '-'})")
+            for o in (await ghl.contact_opportunities(cid)) or []:
+                if o.get("pipelineId") == cfg["pipelineId"]:
+                    await ghl.delete_opportunity(o["id"])
+            await ghl.add_note(cid, f"This chat booking was moved to the demo visitor's own contact: "
+                                    f"{lead.get('name') or '-'} ({lead.get('company') or '-'}).")
+
+
 async def sync_bookings() -> None:
     """The chat bot books, moves and cancels straight in GHL, without telling this server. Look at the calendar
     for our recent leads: a new appointment gets its opportunity + note, and the page shows what happened."""
@@ -1231,6 +1298,7 @@ async def sync_bookings() -> None:
         newest: dict[str, dict] = {}
         for l in recent:                                   # one lead per contact: the latest visit
             newest.setdefault(l["contactId"], l)
+        await guarded("linking chat bookings to the visitor", _adopt_guest_bookings(newest), None)
         tz0 = get_tz("")
         found = await ghl_appointments(set(newest), tz0)
         if found is None:

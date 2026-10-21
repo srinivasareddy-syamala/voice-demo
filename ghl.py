@@ -244,6 +244,24 @@ async def calendar_events(calendar_id: str, start_ms: int, end_ms: int) -> list[
     return [e for e in (j.get("events") or []) if isinstance(e, dict)] if s == 200 else None
 
 
+async def reassign_appointment(event_id: str, contact_id: str) -> bool:
+    """PUT /calendars/events/appointments/{id}: give the appointment to another contact (the chat bot books on its
+    own nameless guest contact; we move it onto the visitor's real contact, which has their email)."""
+    s, _ = await _call("PUT", f"/calendars/events/appointments/{event_id}", json={"contactId": contact_id})
+    return s == 200
+
+
+async def contact_opportunities(contact_id: str) -> list[dict] | None:
+    s, j = await _call("GET", "/opportunities/search",
+                       params={"location_id": os.environ["GHL_LOCATION_ID"], "contact_id": contact_id, "status": "all", "limit": 20})
+    return (j.get("opportunities") or []) if s == 200 else None
+
+
+async def delete_opportunity(opportunity_id: str) -> bool:
+    s, _ = await _call("DELETE", f"/opportunities/{opportunity_id}")
+    return s == 200
+
+
 async def list_pipelines() -> list[dict]:
     """GET /opportunities/pipelines (scope: opportunities.readonly)"""
     s, j = await _call("GET", "/opportunities/pipelines", params={"locationId": os.environ["GHL_LOCATION_ID"]})

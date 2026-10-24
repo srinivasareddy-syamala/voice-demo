@@ -77,6 +77,43 @@ async def _crash(request: Request, e: Exception):
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
 
+# ---------------------------------------------------------------- geo-restriction: UK, India, Dubai only
+_GEO_ENABLED = os.getenv("GEO_RESTRICT", "1") != "0"   # set GEO_RESTRICT=0 in .env to disable
+_ALLOWED_COUNTRIES = {"GB", "IN", "AE"}  # GB=UK, IN=India, AE=UAE/Dubai
+
+@app.middleware("http")
+async def geo_restrict(request: Request, call_next):
+    """Block visitors outside UK, India and UAE. API endpoints and local IPs always allowed."""
+    if not _GEO_ENABLED:
+        return await call_next(request)
+    req_path = request.url.path
+    if req_path.startswith("/api/") or req_path.startswith("/static/") or req_path in ("/", "/favicon.ico"):
+        return await call_next(request)
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "")
+    if not ip or ip in ("127.0.0.1", "::1") or ip.startswith(("10.", "172.16.", "172.17.", "192.168.")):
+        return await call_next(request)
+    try:
+        import urllib.request as _urllib
+        import json as _json
+        with _urllib.urlopen(f"http://ip-api.com/json/{ip}?fields=countryCode", timeout=2) as _r:
+            country = _json.loads(_r.read()).get("countryCode", "")
+        if country and country not in _ALLOWED_COUNTRIES:
+            return HTMLResponse(
+                "<!doctype html><html><head><title>Pragna AI</title>"
+                "<style>body{font-family:sans-serif;text-align:center;padding:80px 20px;background:#f9f9f9}"
+                "h2{color:#1a1a2e}p{color:#555;max-width:420px;margin:16px auto}</style></head>"
+                "<body><h2>Pragna AI</h2>"
+                "<p>This service is currently available in <strong>UK, India and UAE</strong> only.</p>"
+                "<p>We are expanding soon. Thank you for your interest!</p>"
+                "</body></html>",
+                status_code=403
+            )
+    except Exception:
+        pass
+    return await call_next(request)
+
+
 
 def _line_busy(line: dict, now: float) -> bool:
     if not line["ticket"]:

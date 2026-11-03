@@ -1,6 +1,5 @@
 """GoHighLevel (LeadConnector) API v2 client: Voice AI agent + its actions, contacts, calendar, opportunities."""
 import os
-import re
 import time
 
 import httpx
@@ -125,21 +124,6 @@ async def add_note(contact_id: str, text: str) -> bool:
         return False
 
 
-async def get_contact(contact_id: str) -> dict | None:
-    """GET /contacts/{id} -> the contact, or None (also when it belongs to another location)."""
-    s, j = await _call("GET", f"/contacts/{contact_id}")
-    contact = j.get("contact") if s == 200 else None
-    if not contact or contact.get("locationId") != os.environ["GHL_LOCATION_ID"]:
-        return None
-    return contact
-
-
-async def add_tags(contact_id: str, tags: list[str]) -> bool:
-    """POST /contacts/{id}/tags - adds tags and keeps the existing ones."""
-    s, _ = await _call("POST", f"/contacts/{contact_id}/tags", json={"tags": tags})
-    return 200 <= s < 300
-
-
 # ---------------------------------------------------------------- appointments + opportunities
 CAL_VERSION = "2021-04-15"
 # Last failure per kind of request (cleared when that kind works again). Shown on the booking check page.
@@ -243,43 +227,6 @@ async def calendar_events(calendar_id: str, start_ms: int, end_ms: int) -> list[
                        params={"locationId": os.environ["GHL_LOCATION_ID"], "calendarId": calendar_id,
                                "startTime": start_ms, "endTime": end_ms})
     return [e for e in (j.get("events") or []) if isinstance(e, dict)] if s == 200 else None
-
-
-async def widget_voice_agent(widget_id: str) -> str | None:
-    """Which Voice AI agent this chat widget's "Chat with Voice" calls (its public config, as the widget itself reads
-    it). -> agent id, "" when the widget has no voice agent, None when it could not be read."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(f"{BASE}/chat-widget/public/config/{widget_id}")
-        if r.status_code != 200:
-            return None
-        text = r.text.replace('\\"', '"').replace("\\\\", "\\").replace('\\"', '"')
-        i = text.find("voice-ai-agent")
-        if i < 0:
-            return ""
-        m = re.search(r'"agentId"\s*:\s*"([0-9a-fA-F]{24})"', text[i:i + 600])
-        return m.group(1) if m else ""
-    except (httpx.HTTPError, ValueError) as e:
-        print("[ghl] widget config error", e)
-        return None
-
-
-async def reassign_appointment(event_id: str, contact_id: str) -> bool:
-    """PUT /calendars/events/appointments/{id}: give the appointment to another contact (the chat bot books on its
-    own nameless guest contact; we move it onto the visitor's real contact, which has their email)."""
-    s, _ = await _call("PUT", f"/calendars/events/appointments/{event_id}", json={"contactId": contact_id})
-    return s == 200
-
-
-async def contact_opportunities(contact_id: str) -> list[dict] | None:
-    s, j = await _call("GET", "/opportunities/search",
-                       params={"location_id": os.environ["GHL_LOCATION_ID"], "contact_id": contact_id, "status": "all", "limit": 20})
-    return (j.get("opportunities") or []) if s == 200 else None
-
-
-async def delete_opportunity(opportunity_id: str) -> bool:
-    s, _ = await _call("DELETE", f"/opportunities/{opportunity_id}")
-    return s == 200
 
 
 async def list_pipelines() -> list[dict]:

@@ -1837,3 +1837,248 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
+
+
+# ---------------------------------------------------------------- HAF (Honest Abe's Firewood) client demo page
+_HAF_API_KEY      = os.getenv("HAF_GHL_API_KEY", "")
+_HAF_LOCATION_ID  = os.getenv("HAF_GHL_LOCATION_ID", "")
+_HAF_WORKFLOW_ID  = os.getenv("HAF_WORKFLOW_ID", "")
+
+
+class HafCallRequest(BaseModel):
+    phone: str
+    name: str = "Demo Caller"
+
+
+@app.post("/api/haf-call")
+async def haf_call(req: HafCallRequest):
+    """Create / upsert a GHL contact and enrol them in the HAF outbound-call workflow."""
+    phone = re.sub(r"[^\d+]", "", req.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Phone number is required.")
+    if not _HAF_API_KEY or not _HAF_LOCATION_ID or not _HAF_WORKFLOW_ID:
+        # Demo mode – tell the caller we got the request
+        return {"status": "demo", "message": "Demo mode – no GHL keys configured. Abe would call you now!"}
+
+    import urllib.request as _ur
+    import urllib.error as _ue
+
+    headers = {
+        "Authorization": f"Bearer {_HAF_API_KEY}",
+        "Content-Type": "application/json",
+        "Version": "2021-07-28",
+    }
+
+    # 1. Upsert contact
+    contact_payload = json.dumps({
+        "locationId": _HAF_LOCATION_ID,
+        "phone": phone,
+        "firstName": req.name.split()[0] if req.name else "Demo",
+        "lastName":  " ".join(req.name.split()[1:]) if len(req.name.split()) > 1 else "Caller",
+        "source": "HAF Demo Page",
+    }).encode()
+
+    try:
+        upsert_req = _ur.Request(
+            "https://services.leadconnectorhq.com/contacts/upsert",
+            data=contact_payload,
+            headers=headers,
+            method="POST",
+        )
+        with _ur.urlopen(upsert_req, timeout=10) as r:
+            contact_data = json.loads(r.read())
+        contact_id = contact_data.get("contact", {}).get("id") or contact_data.get("id", "")
+    except _ue.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise HTTPException(status_code=502, detail=f"GHL contact upsert failed: {body}")
+
+    if not contact_id:
+        raise HTTPException(status_code=502, detail="GHL did not return a contact ID.")
+
+    # 2. Enrol contact in workflow (triggers outbound AI call)
+    wf_payload = json.dumps({"eventStartTime": datetime.now(timezone.utc).isoformat()}).encode()
+    try:
+        wf_req = _ur.Request(
+            f"https://services.leadconnectorhq.com/contacts/{contact_id}/workflow/{_HAF_WORKFLOW_ID}",
+            data=wf_payload,
+            headers=headers,
+            method="POST",
+        )
+        with _ur.urlopen(wf_req, timeout=10):
+            pass
+    except _ue.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise HTTPException(status_code=502, detail=f"GHL workflow enrol failed: {body}")
+
+    return {"status": "ok", "message": "Abe will call you in a few seconds!"}
+
+
+_HAF_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Honest Abe's Firewood – AI Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;500;600&display=swap">
+<style>
+:root{
+  --wood:#8B2500;--wood-light:#a83000;--cream:#fdf6ee;--text:#1a1a1a;--muted:#6b5c4e;
+  --card:#fff;--border:#e8ddd4;--shadow:0 4px 24px rgba(139,37,0,.10);
+}
+@media(prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --cream:#1a1108;--text:#f5ede3;--muted:#c4a882;--card:#261808;--border:#3d2a14;
+    --shadow:0 4px 24px rgba(0,0,0,.40);color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --cream:#1a1108;--text:#f5ede3;--muted:#c4a882;--card:#261808;--border:#3d2a14;
+  --shadow:0 4px 24px rgba(0,0,0,.40);color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Inter',system-ui,sans-serif;background:var(--cream);color:var(--text);
+  min-height:100vh;display:flex;flex-direction:column;align-items:center;
+  padding:0 16px;
+}
+header{
+  width:100%;max-width:640px;text-align:center;padding:48px 0 32px;
+}
+.logo-bar{
+  display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:16px;
+}
+.axe-icon{font-size:2.2rem}
+.brand{font-family:'Playfair Display',Georgia,serif;font-size:1.75rem;color:var(--wood);line-height:1.1}
+.tagline{font-size:.95rem;color:var(--muted);letter-spacing:.02em}
+.card{
+  width:100%;max-width:480px;background:var(--card);border:1px solid var(--border);
+  border-radius:16px;padding:36px 32px;box-shadow:var(--shadow);
+}
+.card-title{font-family:'Playfair Display',Georgia,serif;font-size:1.3rem;color:var(--wood);margin-bottom:8px}
+.card-sub{font-size:.9rem;color:var(--muted);margin-bottom:28px;line-height:1.5}
+label{display:block;font-size:.85rem;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:.04em;text-transform:uppercase}
+input[type=text],input[type=tel]{
+  width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;
+  font-size:1rem;font-family:inherit;background:var(--cream);color:var(--text);
+  transition:border-color .2s;outline:none;
+}
+input:focus{border-color:var(--wood)}
+.field{margin-bottom:20px}
+.btn{
+  width:100%;padding:14px;background:var(--wood);color:#fff;border:none;border-radius:8px;
+  font-size:1rem;font-weight:600;font-family:inherit;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  transition:background .2s;
+}
+.btn:hover{background:var(--wood-light)}
+.btn:disabled{opacity:.6;cursor:not-allowed}
+.phone-icon{font-size:1.1rem}
+#status{
+  margin-top:20px;padding:14px;border-radius:8px;text-align:center;
+  font-size:.95rem;font-weight:500;display:none;
+}
+#status.success{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+#status.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+@media(prefers-color-scheme:dark){
+  #status.success{background:#052e16;color:#86efac;border-color:#166534}
+  #status.error{background:#2d0000;color:#fca5a5;border-color:#991b1b}
+}
+.divider{width:100%;max-width:480px;text-align:center;margin:24px 0 8px;color:var(--muted);font-size:.8rem}
+.how{
+  width:100%;max-width:480px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;
+  margin-bottom:40px;
+}
+.step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 12px;text-align:center}
+.step-num{
+  width:28px;height:28px;border-radius:50%;background:var(--wood);color:#fff;
+  font-weight:700;font-size:.85rem;display:inline-flex;align-items:center;justify-content:center;
+  margin-bottom:8px;
+}
+.step-text{font-size:.8rem;color:var(--muted);line-height:1.4}
+footer{margin-top:auto;padding:24px 0;font-size:.8rem;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-bar">
+    <span class="axe-icon">🪓</span>
+    <div>
+      <div class="brand">Honest Abe's Firewood</div>
+    </div>
+  </div>
+  <p class="tagline">Ace Hardware Partner · Premium Firewood Delivery</p>
+</header>
+
+<div class="card">
+  <div class="card-title">Talk to Abe, Our AI Ordering Assistant</div>
+  <p class="card-sub">Enter your phone number and Abe will call you within seconds to take your firewood order — fast, friendly, and available 24/7.</p>
+
+  <form id="callForm" onsubmit="startCall(event)">
+    <div class="field">
+      <label for="nameInput">Your Name</label>
+      <input type="text" id="nameInput" placeholder="First &amp; Last Name" autocomplete="name" required>
+    </div>
+    <div class="field">
+      <label for="phoneInput">Your Phone Number</label>
+      <input type="tel" id="phoneInput" placeholder="+1 (555) 000-0000" autocomplete="tel" required>
+    </div>
+    <button class="btn" type="submit" id="callBtn">
+      <span class="phone-icon">📞</span> Call Me Now — Talk to Abe
+    </button>
+  </form>
+  <div id="status"></div>
+</div>
+
+<div class="divider">How it works</div>
+<div class="how">
+  <div class="step"><div class="step-num">1</div><p class="step-text">Enter your name &amp; number above</p></div>
+  <div class="step"><div class="step-num">2</div><p class="step-text">Abe calls you within seconds</p></div>
+  <div class="step"><div class="step-num">3</div><p class="step-text">Place your order — Abe handles everything</p></div>
+</div>
+
+<footer>Powered by Honest Abe's Firewood &amp; Pragna AI · Available 24/7</footer>
+
+<script>
+async function startCall(e){
+  e.preventDefault();
+  const btn = document.getElementById('callBtn');
+  const status = document.getElementById('status');
+  const phone = document.getElementById('phoneInput').value.trim();
+  const name  = document.getElementById('nameInput').value.trim();
+  btn.disabled = true;
+  btn.innerHTML = '<span>⏳</span> Connecting Abe…';
+  status.style.display = 'none';
+  try {
+    const res = await fetch('/api/haf-call', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({phone, name})
+    });
+    const data = await res.json();
+    if(res.ok){
+      status.className = 'success';
+      status.textContent = '✅ ' + (data.message || 'Abe will call you in a few seconds!');
+      status.style.display = 'block';
+      btn.innerHTML = '✅ Call on its way!';
+    } else {
+      throw new Error(data.detail || 'Something went wrong');
+    }
+  } catch(err){
+    status.className = 'error';
+    status.textContent = '❌ ' + err.message;
+    status.style.display = 'block';
+    btn.disabled = false;
+    btn.innerHTML = '<span class=\"phone-icon\">📞</span> Call Me Now — Talk to Abe';
+  }
+}
+</script>
+</body>
+</html>"""
+
+
+@app.get("/haf", response_class=HTMLResponse)
+def haf_demo():
+    """Honest Abe's Firewood client demo page — visitor enters phone, Abe calls back."""
+    return HTMLResponse(_HAF_HTML)

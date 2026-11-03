@@ -24,7 +24,8 @@ load_dotenv(".env.example")   # otherwise use the values in .env.example
 
 import ghl  # noqa: E402
 from persona import (ACTION_BOOK, ACTION_CANCEL, ACTION_CHANGE, ACTION_SLOTS,  # noqa: E402
-                     build_agent_prompt, build_chat_agent, build_welcome)
+                     build_agent_prompt, build_chat_agent, build_chat_agent_multi, build_sample_profile, build_welcome, industry_list,
+                     sample_page, INDUSTRIES)
 from scraper import mobile_preview, scrape_company  # noqa: E402
 
 # The chat + call widget shown inside the phone preview. Fixed in code on purpose: an old
@@ -41,7 +42,7 @@ DEFAULT_WIDGET_ID = WIDGET_ID
 # the pair below - or put all pairs in .env as  GHL_LINES=agentId:widgetId,agentId:widgetId
 DEFAULT_LINES = [(os.getenv("GHL_AGENT_ID") or "6abdf3955deba8d1c1f3ac30", WIDGET_ID),
                  ("6ac51060e7267112e69b5de7", "6ac51135f1d5945734fe5e9f")]
-LINE_HOLD = int(os.getenv("LINE_HOLD_SECONDS", "420"))     # with people waiting, a visitor keeps a line this long
+LINE_HOLD = int(os.getenv("LINE_HOLD_SECONDS", "540"))     # with people waiting, a visitor keeps a line this long
 LINE_GRACE = int(os.getenv("LINE_GRACE_SECONDS", "90"))    # no sign of life from the page for this long = they left
 
 
@@ -77,42 +78,44 @@ async def _crash(request: Request, e: Exception):
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
                    allow_methods=["*"], allow_headers=["*"])
 
-# ---------------------------------------------------------------- geo-restriction: UK, India, Dubai only
+# ---------------------------------------------------------------- geo-restriction: UK only
 _GEO_ENABLED = os.getenv("GEO_RESTRICT", "1") != "0"   # set GEO_RESTRICT=0 in .env to disable
-_ALLOWED_COUNTRIES = {"GB", "IN", "AE"}  # GB=UK, IN=India, AE=UAE/Dubai
 
 @app.middleware("http")
-async def geo_restrict(request: Request, call_next):
-    """Block visitors outside UK, India and UAE. API endpoints and local IPs always allowed."""
+async def uk_only(request: Request, call_next):
+    """Block visitors from outside the UK. API endpoints and local IPs are always allowed."""
     if not _GEO_ENABLED:
         return await call_next(request)
-    req_path = request.url.path
-    if req_path.startswith("/api/") or req_path.startswith("/static/") or req_path in ("/", "/favicon.ico"):
+    path = request.url.path
+    # Always allow: API callbacks (voice agent, booking), static assets, health
+    if path.startswith("/api/") or path.startswith("/static/") or path in ("/", "/favicon.ico"):
         return await call_next(request)
+    # Get real IP (Caddy forwards it in X-Forwarded-For)
     forwarded = request.headers.get("X-Forwarded-For", "")
     ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "")
+    # Always allow local / private IPs (dev environment)
     if not ip or ip in ("127.0.0.1", "::1") or ip.startswith(("10.", "172.16.", "172.17.", "192.168.")):
         return await call_next(request)
+    # Check country via ip-api.com (free tier, no key needed)
     try:
         import urllib.request as _urllib
         import json as _json
         with _urllib.urlopen(f"http://ip-api.com/json/{ip}?fields=countryCode", timeout=2) as _r:
             country = _json.loads(_r.read()).get("countryCode", "")
-        if country and country not in _ALLOWED_COUNTRIES:
+        if country and country != "GB":
             return HTMLResponse(
                 "<!doctype html><html><head><title>Pragna AI</title>"
                 "<style>body{font-family:sans-serif;text-align:center;padding:80px 20px;background:#f9f9f9}"
                 "h2{color:#1a1a2e}p{color:#555;max-width:420px;margin:16px auto}</style></head>"
                 "<body><h2>Pragna AI</h2>"
-                "<p>This service is currently available in <strong>UK, India and UAE</strong> only.</p>"
-                "<p>We are expanding soon. Thank you for your interest!</p>"
+                "<p>This service is currently available in the <strong>United Kingdom</strong> only.</p>"
+                "<p>We're expanding soon. Thank you for your interest!</p>"
                 "</body></html>",
                 status_code=403
             )
     except Exception:
-        pass
+        pass  # on geo-check failure, allow through rather than block
     return await call_next(request)
-
 
 
 def _line_busy(line: dict, now: float) -> bool:
@@ -134,6 +137,43 @@ def _free_line(line: dict) -> None:
     line.update(ticket="", ref="", since=0.0)
 
 
+# Each line only works if its chat widget's "Chat with Voice" calls the line's OWN agent. If a widget points at another
+# line's agent, two visitors end up talking to the same agent and hear each other's company. Such a line is not used.
+WIDGET_AGENT: dict[str, dict] = {}     # widget id -> {"agent": agent id ("" none, None unknown), "ts": when read}
+
+
+async def refresh_widget_agents(force: bool = False) -> None:
+    """Read which agent each line's widget really calls, and give the line THAT agent (the visitor's company must be
+    written into the agent their widget talks to). If two widgets call the same agent, only the first line is used."""
+    now = time.time()
+    changed = False
+    for line in LINES:
+        w = WIDGET_AGENT.get(line["widget"])
+        if force or not w or now - w["ts"] > 300:
+            WIDGET_AGENT[line["widget"]] = {"agent": await ghl.widget_voice_agent(line["widget"]), "ts": now}
+            changed = True
+    if not changed:
+        return
+    taken: set[str] = set()
+    for line in LINES:
+        calls = WIDGET_AGENT[line["widget"]]["agent"]
+        if calls and re.fullmatch(r"[0-9a-fA-F]{24}", calls) and calls not in taken and calls != line["agent"]:
+            busy_with = next((l for l in LINES if l is not line and l["agent"] == calls and _line_busy(l, now)), None)
+            if not busy_with and not _line_busy(line, now):
+                print(f"[lines] widget {line['widget']} calls agent {calls}: line now uses that agent (was {line['agent']})")
+                line["agent"] = calls
+        if calls:
+            taken.add(calls)
+
+
+def line_ok(line: dict) -> bool:
+    agent = (WIDGET_AGENT.get(line["widget"]) or {}).get("agent")
+    if agent is None:                                        # not known yet: assume it is set up right
+        return True
+    first = next((l for l in LINES if (WIDGET_AGENT.get(l["widget"]) or {}).get("agent") == agent), line)
+    return agent == line["agent"] and first is line         # its own agent, not shared with an earlier line
+
+
 def acquire_line(ticket: str) -> tuple[dict | None, int, int]:
     """A line for this visitor -> (line, 0, 0), or (None, place in the queue, rough seconds to wait)."""
     now = time.time()
@@ -145,9 +185,10 @@ def acquire_line(ticket: str) -> tuple[dict | None, int, int]:
     w = WAITING.setdefault(ticket, {"ts": now, "seen": now})
     w["seen"] = now
     place = sorted(WAITING, key=lambda t: WAITING[t]["ts"]).index(ticket)
-    free = sorted([l for l in LINES if not _line_busy(l, now)], key=lambda l: l["since"])
+    pool = [l for l in LINES if line_ok(l)] or LINES[:1]     # a mis-wired widget's line is left out
+    free = sorted([l for l in pool if not _line_busy(l, now)], key=lambda l: l["since"])
     # with somebody waiting, a visitor who has had the line for LINE_HOLD seconds gives it up
-    overdue = sorted([l for l in LINES if l not in free and l["ref"] and now - l["since"] > LINE_HOLD], key=lambda l: l["since"])
+    overdue = sorted([l for l in pool if l not in free and l["ref"] and now - l["since"] > LINE_HOLD], key=lambda l: l["since"])
     available = free + overdue
     if place < len(available):
         line = available[place]
@@ -156,7 +197,7 @@ def acquire_line(ticket: str) -> tuple[dict | None, int, int]:
         WAITING.pop(ticket, None)
         return line, 0, 0
     behind = place - len(available)                          # how many lines must come free before it is my turn
-    left = sorted(max(0.0, LINE_HOLD - (now - l["since"])) for l in LINES if l not in available)
+    left = sorted(max(0.0, LINE_HOLD - (now - l["since"])) for l in pool if l not in available)
     wait = (left[behind % len(left)] if left else 0) + (behind // max(len(left), 1)) * LINE_HOLD
     return None, place + 1, int(wait)
 
@@ -170,7 +211,10 @@ class TrainRequest(BaseModel):
     email: str = ""
     phone: str = ""
     company: str = ""
-    website: str
+    website: str = ""     # empty = "I don't have a website": then industry (+ town, services) is used instead
+    industry: str = ""    # key of persona.INDUSTRIES, for a business without a website
+    town: str = ""
+    services: str = ""
     consent: bool = False
     tz: str = ""          # visitor's timezone from the browser, e.g. Europe/London (used for appointments)
     ticket: str = ""      # the page's id for this visitor; the same one is sent again while waiting for a free line
@@ -430,7 +474,32 @@ def config():
         "ghlConfigured": ghl.configured(),
         "booking": booking_enabled(),
         "lines": len(LINES),
+        "industries": industry_list(),       # for "I don't have a website"
     }
+
+
+@app.get("/api/prefill")
+async def prefill(c: str = ""):
+    """The outreach email links to demo.pragna.ai/?c={{contact.id}}: return what we already know about that contact so
+    the form is filled in for them, and tag them demo-viewed (the PRAGNA pipeline moves the card to Demo Viewed)."""
+    if not (ghl.configured() and re.fullmatch(r"[A-Za-z0-9]{15,40}", c)):
+        return JSONResponse({}, headers={"Cache-Control": "no-store"})
+    contact = await ghl.get_contact(c)
+    if not contact:
+        return JSONResponse({}, headers={"Cache-Control": "no-store"})
+    asyncio.create_task(ghl.add_tags(c, ["demo-viewed"]))
+    name = (contact.get("contactName") or " ".join(x for x in (contact.get("firstName"), contact.get("lastName")) if x) or "").strip()
+    data = {"name": name.title() if name.islower() else name, "email": contact.get("email") or "",
+            "phone": contact.get("phone") or "", "company": contact.get("companyName") or "",
+            "website": contact.get("website") or ""}
+    return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
+async def _sample_site(req: TrainRequest, ticket: str) -> dict:
+    """No website: a profile and a one-page sample site built from their type of business."""
+    data = build_sample_profile(req.industry, req.company, req.town, req.services, ticket)
+    data["_home_html"], data["_home_url"], data["_rendered"] = sample_page(data), data["website"], False
+    return data
 
 
 async def _read_site(req: TrainRequest) -> dict:
@@ -445,8 +514,14 @@ async def train(req: TrainRequest, request: Request):
     t0 = time.time()
     if not req.consent:
         raise HTTPException(400, "Please tick the consent box to continue.")
+    no_site = not req.website.strip()
+    if no_site and req.industry not in INDUSTRIES:
+        raise HTTPException(400, "Please enter your website, or tick \"I don't have a website\" and choose your type of business.")
+    if no_site and not req.company.strip():
+        raise HTTPException(400, "Please enter your company name.")
     visitor = req.model_dump()
     ticket = re.sub(r"[^A-Za-z0-9]", "", req.ticket)[:40] or secrets.token_hex(8)
+    label = INDUSTRIES.get(req.industry, INDUSTRIES["other"])[0]
 
     # 1) the first time we hear from this visitor: save the form to GHL straight away (the lead is kept even if
     #    the website can't be read or they give up waiting) and start reading their website
@@ -456,9 +531,12 @@ async def train(req: TrainRequest, request: Request):
             JOBS.pop(t, None)
         job = JOBS[ticket] = {
             "ts": t0, "lock": asyncio.Lock(),
-            "consent": "Consent to use public website content for the demo: YES (" + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")",
-            "contact": asyncio.create_task(ghl.upsert_contact(visitor, req.company, req.website) if ghl.configured() else asyncio.sleep(0)),
-            "site": asyncio.create_task(_read_site(req))}
+            "consent": ("Consent to use the details given for the demo: YES (" if no_site else
+                        "Consent to use public website content for the demo: YES (") + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime()) + ")",
+            "contact": asyncio.create_task(ghl.upsert_contact(visitor, req.company, req.website,
+                                                              ["voice-ai-demo", "no-website"] if no_site else None)
+                                           if ghl.configured() else asyncio.sleep(0)),
+            "site": asyncio.create_task(_sample_site(req, ticket) if no_site else _read_site(req))}
     contact_task = job["contact"]
 
     async def note(text: str):
@@ -468,7 +546,10 @@ async def train(req: TrainRequest, request: Request):
         return contact
 
     form_lines = (f"Name: {req.name}\nEmail: {req.email or '-'}\nPhone: {req.phone or '-'}\n"
-                  f"Company: {req.company or '-'}\nWebsite: {req.website}\n{job['consent']}")
+                  f"Company: {req.company or '-'}\n"
+                  + (f"Website: NONE - sample demo for type of business: {label}\nTown: {req.town or '-'}\n"
+                     f"Services given: {req.services or '-'}\n" if no_site else f"Website: {req.website}\n")
+                  + job["consent"])
 
     async def site_failed(e: Exception):
         JOBS.pop(ticket, None)
@@ -497,11 +578,11 @@ async def train(req: TrainRequest, request: Request):
             # keep the homepage we fetched so the phone can show the live site
             home_html, home_url, rendered = data.pop("_home_html", None), data.pop("_home_url", None), data.pop("_rendered", False)
             if home_html:
-                site_typed = req.website.strip() if "://" in req.website else "https://" + req.website.strip()
+                site_typed = "" if no_site else req.website.strip() if "://" in req.website else "https://" + req.website.strip()
                 cache_page([site_typed, home_url, data["website"]], home_html, home_url or data["website"], rendered)
 
             # remember this lead so the agent (or the button on the page) can book an appointment for them
-            lead = new_lead(visitor, data["company_name"], data["website"])
+            lead = new_lead(visitor, data["company_name"], "" if no_site else data["website"])
             lead.update(agent=line["agent"], widget=line["widget"], seen=time.time())
             line["ref"] = lead["ref"]
             # this line's agent has its booking actions (first run creates them in GHL); free appointment times go
@@ -539,6 +620,29 @@ async def train(req: TrainRequest, request: Request):
                 if not req.company.strip() and isinstance(saved, dict) and saved.get("id"):
                     # "Company name" was left empty on the form: use the name read from their website
                     await ghl.fill_company_name(saved["id"], data.get("company_name") or "")
+                # Store a company brief in the GHL custom field so the voice agent's merge fields work
+                if isinstance(saved, dict) and saved.get("id") and not no_site:
+                    brief_parts = []
+                    if data.get("description"):
+                        brief_parts.append(data["description"])
+                    if data.get("about"):
+                        brief_parts.append("About: " + data["about"])
+                    if data.get("services"):
+                        brief_parts.append("Services/products: " + ", ".join(data["services"][:15]))
+                    if data.get("highlights"):
+                        brief_parts.append("Key points: " + "; ".join(data["highlights"][:10]))
+                    if data.get("address"):
+                        brief_parts.append("Address: " + data["address"])
+                    if data.get("phones"):
+                        brief_parts.append("Phone: " + ", ".join(data["phones"][:3]))
+                    if data.get("hours"):
+                        brief_parts.append("Hours: " + data["hours"])
+                    company_brief = "\n".join(brief_parts).strip()
+                    if company_brief:
+                        await ghl.set_contact_custom_field(saved["id"], "pragna_company_brief", company_brief)
+                if no_site:
+                    return await note(f"Pragna AI voice demo request - NO WEBSITE (sample for {label})\n\n{form_lines}\n\n"
+                                      f"Lead for a website too: the visitor said they do not have one.")
                 return await note(
                     f"Pragna AI voice demo request\n\n{form_lines}\n\n"
                     f"Scraped company: {data['company_name']} ({data['website']})\n"
@@ -549,8 +653,8 @@ async def train(req: TrainRequest, request: Request):
 
             agent_status, contact, preview, chat_status = await asyncio.gather(
                 update_agent(), guarded("contact note", save_contact(), None),
-                guarded("phone preview", mobile_preview(data["website"]), {}),
-                guarded("chat bot", update_chat_bot(data, visitor), "error: see the check page"))
+                guarded("phone preview", asyncio.sleep(0, {}) if no_site else mobile_preview(data["website"]), {}),
+                guarded("chat bot", update_chat_bot(data, visitor, line), "error: see the check page"))
             lead["contactId"] = lead["contactId"] or (contact or {}).get("id") or ""
             lead["seen"] = time.time()
             save_state()
@@ -564,6 +668,8 @@ async def train(req: TrainRequest, request: Request):
                 "company": {k: data[k] for k in ("company_name", "website", "description", "services",
                                                  "hours", "address", "emails", "phones", "socials", "pages_scraped")},
                 "faqCount": len(data["faqs"]),
+                "sample": no_site,
+                "industry": label if no_site else "",
                 "welcomeMessage": welcome,
                 "promptPreview": prompt[:1500],
                 "promptChars": len(prompt),
@@ -1208,6 +1314,73 @@ async def current_booking(lead: dict) -> dict | None:
     return lead["booking"]
 
 
+# The chat bot books on the chat's own guest contact ("Guest Visitor Abcde", or the name typed in the chat), which
+# has no email: no confirmation or reschedule email can reach the visitor, this server does not see the booking,
+# and the "booked" workflow makes a second card for the guest. So: a chat booking on a contact WITHOUT an email,
+# made while a demo visitor is active, is moved onto that visitor's real contact (made from the demo form), and the
+# guest's cards are removed. sync_bookings() then treats it like any booking: email, card moved, note.
+GUESTS: dict[str, float] = {}          # guest contact id -> when its booking was moved (its cards are tidied for a while)
+CHAT_GUEST_WINDOW = 1800               # a chat booking belongs to the visitor active in the last 30 minutes
+
+
+def _norm_name(s: str) -> str:
+    return re.sub(r"[^a-z]", "", (s or "").lower())
+
+
+async def _adopt_guest_bookings(newest: dict[str, dict]) -> None:
+    cfg = await booking_config()
+    if not cfg["calendarId"]:
+        return
+    now = time.time()
+    active = sorted([l for l in newest.values() if now - max(l.get("ts", 0), l.get("seen", 0)) < CHAT_GUEST_WINDOW],
+                    key=lambda l: -max(l.get("ts", 0), l.get("seen", 0)))
+    # cards the "booked" workflow made for guests we already moved (it can fire a minute or two later)
+    for gid, t in list(GUESTS.items()):
+        if now - t > 900:
+            GUESTS.pop(gid, None)
+            continue
+        for o in (await ghl.contact_opportunities(gid)) or []:
+            if o.get("pipelineId") == cfg["pipelineId"] and await ghl.delete_opportunity(o["id"]):
+                log_event("book", "server", "tidied", f"Removed the duplicate card '{o.get('name', '')}' of a chat guest")
+    if not active:
+        return
+    events = await ghl.calendar_events(cfg["calendarId"], int((now - 3600) * 1000), int((now + 62 * 86400) * 1000))
+    for ev in events or []:
+        cid = ev.get("contactId") or ""
+        if (not ev.get("id") or not cid or cid in newest or ev.get("deleted")
+                or _event_state(ev) in ("cancelled", "invalid")
+                or ((ev.get("createdBy") or {}).get("source") or "conversations_ai") != "conversations_ai"):
+            continue
+        added = _parse_when(ev.get("dateAdded", ""), timezone.utc)
+        if not added or now - added.timestamp() > CHAT_GUEST_WINDOW:
+            continue
+        guest = await ghl.get_contact(cid)
+        if not guest or guest.get("email"):                # a real contact with an email: GHL emails them itself
+            continue
+        gname = _norm_name(f"{guest.get('firstName') or ''}{guest.get('lastName') or ''}")
+        by_name = [l for l in active if gname and _norm_name(l.get("name", "")) == gname]
+        if by_name:
+            lead = by_name[0]
+        elif len(active) == 1 or max(active[0].get("ts", 0), active[0].get("seen", 0)) - \
+                max(active[1].get("ts", 0), active[1].get("seen", 0)) > 600:
+            lead = active[0]                               # only one visitor recently (or clearly the latest)
+        else:
+            log_event("book", "server", "not linked", "A chat booking on a guest contact could not be matched: "
+                                                      "two demo visitors were active at the same time")
+            continue
+        if added.timestamp() < lead.get("ts", 0) - 300:    # booked before this visitor's demo: not theirs
+            continue
+        if await ghl.reassign_appointment(ev["id"], lead["contactId"]):
+            GUESTS[cid] = now
+            log_event("book", "server", "linked", f"Chat booking moved from the chat guest contact to "
+                                                  f"{lead.get('company') or '-'} ({lead.get('name') or '-'})")
+            for o in (await ghl.contact_opportunities(cid)) or []:
+                if o.get("pipelineId") == cfg["pipelineId"]:
+                    await ghl.delete_opportunity(o["id"])
+            await ghl.add_note(cid, f"This chat booking was moved to the demo visitor's own contact: "
+                                    f"{lead.get('name') or '-'} ({lead.get('company') or '-'}).")
+
+
 async def sync_bookings() -> None:
     """The chat bot books, moves and cancels straight in GHL, without telling this server. Look at the calendar
     for our recent leads: a new appointment gets its opportunity + note, and the page shows what happened."""
@@ -1222,6 +1395,7 @@ async def sync_bookings() -> None:
         newest: dict[str, dict] = {}
         for l in recent:                                   # one lead per contact: the latest visit
             newest.setdefault(l["contactId"], l)
+        await guarded("linking chat bookings to the visitor", _adopt_guest_bookings(newest), None)
         tz0 = get_tz("")
         found = await ghl_appointments(set(newest), tz0)
         if found is None:
@@ -1379,6 +1553,10 @@ async def _sync_loop() -> None:
     while True:
         await asyncio.sleep(40)
         try:
+            await refresh_widget_agents()
+        except Exception as e:
+            record_error("checking which agent each chat widget calls", e)
+        try:
             await sync_bookings()
         except Exception as e:                              # never let the loop die
             record_error("reading the calendar for chat bookings", e)
@@ -1394,6 +1572,7 @@ async def _sync_loop() -> None:
 
 @app.on_event("startup")
 async def _start_sync() -> None:
+    bg(refresh_widget_agents(force=True))
     bg(_sync_loop())
 
 
@@ -1453,10 +1632,16 @@ async def chat_bot(force: bool = False) -> tuple[dict, str]:
     return st["bot"], ""
 
 
-async def update_chat_bot(data: dict, visitor: dict) -> str:
-    """Write this visitor's company into the chat bot and make sure it can book. -> "updated", "off" or "error: ..."."""
+async def update_chat_bot(data: dict, visitor: dict, line: dict | None = None) -> str:
+    """Write this visitor's company into the chat bot and make sure it can book. -> "updated", "off" or "error: ...".
+    GHL has ONE chat bot for the account: when other visitors are using the demo at the same time, the bot gets every
+    current business and asks each chatter which one they are from (otherwise it would talk about the newest only)."""
     if not chat_enabled():
         return "off"
+    if line is not None:
+        line["chat"] = (data, {"name": visitor.get("name", "")})
+    now = time.time()
+    others = [l["chat"] for l in LINES if l is not line and l.get("chat") and _line_busy(l, now)]
     async with _chat_lock:
         st = STATE.setdefault("chat", {})
         bot, problem = await chat_bot()
@@ -1469,12 +1654,17 @@ async def update_chat_bot(data: dict, visitor: dict) -> str:
         res, limits = {}, [st.get("limit") or 0, 4000, 2800, 1900, 1200]     # 0 = everything; GHL may allow less
         while limits:
             limit = limits.pop(0)
-            body = {**build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit),
-                    "businessName": data["company_name"][:80], "mode": "auto-pilot", "channels": CHAT_CHANNELS,
+            text = (build_chat_agent_multi([(data, visitor)] + others, bool(cfg["calendarId"]), limit or 6000) if others
+                    else build_chat_agent(data, visitor, bool(cfg["calendarId"]), limit))
+            body = {**text, "businessName": (f"{os.getenv('BRAND_NAME', 'Pragna AI')} demo" if others else data["company_name"])[:80],
+                    "mode": "auto-pilot",
                     "autoPilotMaxMessages": max(int(bot.get("autoPilotMaxMessages") or 0)
                                                 if str(bot.get("autoPilotMaxMessages") or "0").isdigit() else 0, 50)}
             if not bot:                                     # no bot in this account yet: make one for the demo
-                body.update(name=CHAT_BOT_NAME, isPrimary=True, waitTime=2, waitTimeUnit="seconds", sleepEnabled=False)
+                body.update(name=CHAT_BOT_NAME, isPrimary=True, waitTime=2, waitTimeUnit="seconds", sleepEnabled=False,
+                            channels=CHAT_CHANNELS)
+            # an existing bot keeps its channels: sending them again switches off "Primary bot" for Live Chat
+            # (set in GHL), and a bot that is not primary never answers the widget's chat
             res = await ghl.save_chat_agent(bot.get("id", ""), body)
             if res.get("id"):
                 st["limit"] = limit                         # remember what fitted
@@ -1720,9 +1910,19 @@ async def booking_check(base: str) -> dict:
                  "GHL accepted send-only actions: the agent sends the request but does not hear the result."))
         debug_actions[line["agent"]] = [{k: x.get(k) for k in ("name", "type", "method", "url", "keys", "paramKeys")} | {"hasId": bool(x.get("id"))}
                                         for x in on_agent or []]
+    await guarded("check: which agent each chat widget calls", refresh_widget_agents(force=True), None)
+    for i, line in enumerate(LINES, 1):
+        tag = f"Line {i}: " if len(LINES) > 1 else ""
+        calls = (WIDGET_AGENT.get(line["widget"]) or {}).get("agent")
+        step(tag + "its chat widget calls this line's own voice agent", None if calls is None else calls == line["agent"],
+             "Could not read the widget's settings from GHL." if calls is None else
+             f"widget {line['widget']} -> agent {line['agent']}" if calls == line["agent"] else
+             (f"Widget {line['widget']} calls agent {calls or '(none)'} instead of {line['agent']}. Two visitors would hear the "
+              f"same company, so this line is NOT used. Fix: GHL > Sites > Chat Widget > this widget > Voice AI agent."))
     now = time.time()
     step("Lines for visitors", True, " | ".join(
-        f"Line {i}: " + (f"busy for {int((now - l['since']) // 60)} min" if _line_busy(l, now) else "free") for i, l in enumerate(LINES, 1))
+        f"Line {i}: " + ("NOT USED (widget calls another agent)" if not line_ok(l) else
+                         f"busy for {int((now - l['since']) // 60)} min" if _line_busy(l, now) else "free") for i, l in enumerate(LINES, 1))
         + f" | waiting: {len(WAITING)} | a visitor keeps a line up to {LINE_HOLD // 60} min when others are waiting")
 
     _bcfg["ts"] = 0.0
@@ -1766,6 +1966,12 @@ async def booking_check(base: str) -> dict:
                  cst.get("error") or f"{bot.get('name')} | mode: {bot.get('mode')} | channels: {chans}"
                  + (" | company text last written " + time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(cst["updated"])) if cst.get("updated") else
                     " | the company text is written when the form is submitted"))
+            not_primary = [_channel_label(c) for c in (bot.get("channels") or [])
+                           if isinstance(c, dict) and c.get("isPrimary") is False]
+            step("Text chat: the chat bot is the primary bot for the website chat", not not_primary,
+                 ("Not primary for: " + ", ".join(not_primary) + ". GHL only hands a chat to the primary bot - open AI Agents > "
+                  "Conversation AI > " + str(bot.get("name")) + " and set it as Primary for Live Chat.") if not_primary
+                 else "Primary for the widget's chat")
             if cst.get("updated"):
                 step("Text chat: the chat bot can book, change and cancel appointments", bool(cst.get("action")) and not cst.get("actionError"),
                      cst.get("actionError") or ("Appointment booking is switched on" if cst.get("action") else "Checked on the next form submission"))
@@ -1837,248 +2043,3 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
-
-
-# ---------------------------------------------------------------- HAF (Honest Abe's Firewood) client demo page
-_HAF_API_KEY      = os.getenv("HAF_GHL_API_KEY", "")
-_HAF_LOCATION_ID  = os.getenv("HAF_GHL_LOCATION_ID", "")
-_HAF_WORKFLOW_ID  = os.getenv("HAF_WORKFLOW_ID", "")
-
-
-class HafCallRequest(BaseModel):
-    phone: str
-    name: str = "Demo Caller"
-
-
-@app.post("/api/haf-call")
-async def haf_call(req: HafCallRequest):
-    """Create / upsert a GHL contact and enrol them in the HAF outbound-call workflow."""
-    phone = re.sub(r"[^\d+]", "", req.phone)
-    if not phone:
-        raise HTTPException(status_code=400, detail="Phone number is required.")
-    if not _HAF_API_KEY or not _HAF_LOCATION_ID or not _HAF_WORKFLOW_ID:
-        # Demo mode – tell the caller we got the request
-        return {"status": "demo", "message": "Demo mode – no GHL keys configured. Abe would call you now!"}
-
-    import urllib.request as _ur
-    import urllib.error as _ue
-
-    headers = {
-        "Authorization": f"Bearer {_HAF_API_KEY}",
-        "Content-Type": "application/json",
-        "Version": "2021-07-28",
-    }
-
-    # 1. Upsert contact
-    contact_payload = json.dumps({
-        "locationId": _HAF_LOCATION_ID,
-        "phone": phone,
-        "firstName": req.name.split()[0] if req.name else "Demo",
-        "lastName":  " ".join(req.name.split()[1:]) if len(req.name.split()) > 1 else "Caller",
-        "source": "HAF Demo Page",
-    }).encode()
-
-    try:
-        upsert_req = _ur.Request(
-            "https://services.leadconnectorhq.com/contacts/upsert",
-            data=contact_payload,
-            headers=headers,
-            method="POST",
-        )
-        with _ur.urlopen(upsert_req, timeout=10) as r:
-            contact_data = json.loads(r.read())
-        contact_id = contact_data.get("contact", {}).get("id") or contact_data.get("id", "")
-    except _ue.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        raise HTTPException(status_code=502, detail=f"GHL contact upsert failed: {body}")
-
-    if not contact_id:
-        raise HTTPException(status_code=502, detail="GHL did not return a contact ID.")
-
-    # 2. Enrol contact in workflow (triggers outbound AI call)
-    wf_payload = json.dumps({"eventStartTime": datetime.now(timezone.utc).isoformat()}).encode()
-    try:
-        wf_req = _ur.Request(
-            f"https://services.leadconnectorhq.com/contacts/{contact_id}/workflow/{_HAF_WORKFLOW_ID}",
-            data=wf_payload,
-            headers=headers,
-            method="POST",
-        )
-        with _ur.urlopen(wf_req, timeout=10):
-            pass
-    except _ue.HTTPError as e:
-        body = e.read().decode(errors="replace")
-        raise HTTPException(status_code=502, detail=f"GHL workflow enrol failed: {body}")
-
-    return {"status": "ok", "message": "Abe will call you in a few seconds!"}
-
-
-_HAF_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Honest Abe's Firewood – AI Demo</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;500;600&display=swap">
-<style>
-:root{
-  --wood:#8B2500;--wood-light:#a83000;--cream:#fdf6ee;--text:#1a1a1a;--muted:#6b5c4e;
-  --card:#fff;--border:#e8ddd4;--shadow:0 4px 24px rgba(139,37,0,.10);
-}
-@media(prefers-color-scheme:dark){
-  :root:not([data-theme="light"]){
-    --cream:#1a1108;--text:#f5ede3;--muted:#c4a882;--card:#261808;--border:#3d2a14;
-    --shadow:0 4px 24px rgba(0,0,0,.40);color-scheme:dark;
-  }
-}
-:root[data-theme="dark"]{
-  --cream:#1a1108;--text:#f5ede3;--muted:#c4a882;--card:#261808;--border:#3d2a14;
-  --shadow:0 4px 24px rgba(0,0,0,.40);color-scheme:dark;
-}
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{
-  font-family:'Inter',system-ui,sans-serif;background:var(--cream);color:var(--text);
-  min-height:100vh;display:flex;flex-direction:column;align-items:center;
-  padding:0 16px;
-}
-header{
-  width:100%;max-width:640px;text-align:center;padding:48px 0 32px;
-}
-.logo-bar{
-  display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:16px;
-}
-.axe-icon{font-size:2.2rem}
-.brand{font-family:'Playfair Display',Georgia,serif;font-size:1.75rem;color:var(--wood);line-height:1.1}
-.tagline{font-size:.95rem;color:var(--muted);letter-spacing:.02em}
-.card{
-  width:100%;max-width:480px;background:var(--card);border:1px solid var(--border);
-  border-radius:16px;padding:36px 32px;box-shadow:var(--shadow);
-}
-.card-title{font-family:'Playfair Display',Georgia,serif;font-size:1.3rem;color:var(--wood);margin-bottom:8px}
-.card-sub{font-size:.9rem;color:var(--muted);margin-bottom:28px;line-height:1.5}
-label{display:block;font-size:.85rem;font-weight:600;color:var(--muted);margin-bottom:6px;letter-spacing:.04em;text-transform:uppercase}
-input[type=text],input[type=tel]{
-  width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:8px;
-  font-size:1rem;font-family:inherit;background:var(--cream);color:var(--text);
-  transition:border-color .2s;outline:none;
-}
-input:focus{border-color:var(--wood)}
-.field{margin-bottom:20px}
-.btn{
-  width:100%;padding:14px;background:var(--wood);color:#fff;border:none;border-radius:8px;
-  font-size:1rem;font-weight:600;font-family:inherit;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;gap:10px;
-  transition:background .2s;
-}
-.btn:hover{background:var(--wood-light)}
-.btn:disabled{opacity:.6;cursor:not-allowed}
-.phone-icon{font-size:1.1rem}
-#status{
-  margin-top:20px;padding:14px;border-radius:8px;text-align:center;
-  font-size:.95rem;font-weight:500;display:none;
-}
-#status.success{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
-#status.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
-@media(prefers-color-scheme:dark){
-  #status.success{background:#052e16;color:#86efac;border-color:#166534}
-  #status.error{background:#2d0000;color:#fca5a5;border-color:#991b1b}
-}
-.divider{width:100%;max-width:480px;text-align:center;margin:24px 0 8px;color:var(--muted);font-size:.8rem}
-.how{
-  width:100%;max-width:480px;display:grid;grid-template-columns:repeat(3,1fr);gap:12px;
-  margin-bottom:40px;
-}
-.step{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 12px;text-align:center}
-.step-num{
-  width:28px;height:28px;border-radius:50%;background:var(--wood);color:#fff;
-  font-weight:700;font-size:.85rem;display:inline-flex;align-items:center;justify-content:center;
-  margin-bottom:8px;
-}
-.step-text{font-size:.8rem;color:var(--muted);line-height:1.4}
-footer{margin-top:auto;padding:24px 0;font-size:.8rem;color:var(--muted);text-align:center}
-</style>
-</head>
-<body>
-
-<header>
-  <div class="logo-bar">
-    <span class="axe-icon">🪓</span>
-    <div>
-      <div class="brand">Honest Abe's Firewood</div>
-    </div>
-  </div>
-  <p class="tagline">Ace Hardware Partner · Premium Firewood Delivery</p>
-</header>
-
-<div class="card">
-  <div class="card-title">Talk to Abe, Our AI Ordering Assistant</div>
-  <p class="card-sub">Enter your phone number and Abe will call you within seconds to take your firewood order — fast, friendly, and available 24/7.</p>
-
-  <form id="callForm" onsubmit="startCall(event)">
-    <div class="field">
-      <label for="nameInput">Your Name</label>
-      <input type="text" id="nameInput" placeholder="First &amp; Last Name" autocomplete="name" required>
-    </div>
-    <div class="field">
-      <label for="phoneInput">Your Phone Number</label>
-      <input type="tel" id="phoneInput" placeholder="+1 (555) 000-0000" autocomplete="tel" required>
-    </div>
-    <button class="btn" type="submit" id="callBtn">
-      <span class="phone-icon">📞</span> Call Me Now — Talk to Abe
-    </button>
-  </form>
-  <div id="status"></div>
-</div>
-
-<div class="divider">How it works</div>
-<div class="how">
-  <div class="step"><div class="step-num">1</div><p class="step-text">Enter your name &amp; number above</p></div>
-  <div class="step"><div class="step-num">2</div><p class="step-text">Abe calls you within seconds</p></div>
-  <div class="step"><div class="step-num">3</div><p class="step-text">Place your order — Abe handles everything</p></div>
-</div>
-
-<footer>Powered by Honest Abe's Firewood &amp; Pragna AI · Available 24/7</footer>
-
-<script>
-async function startCall(e){
-  e.preventDefault();
-  const btn = document.getElementById('callBtn');
-  const status = document.getElementById('status');
-  const phone = document.getElementById('phoneInput').value.trim();
-  const name  = document.getElementById('nameInput').value.trim();
-  btn.disabled = true;
-  btn.innerHTML = '<span>⏳</span> Connecting Abe…';
-  status.style.display = 'none';
-  try {
-    const res = await fetch('/api/haf-call', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({phone, name})
-    });
-    const data = await res.json();
-    if(res.ok){
-      status.className = 'success';
-      status.textContent = '✅ ' + (data.message || 'Abe will call you in a few seconds!');
-      status.style.display = 'block';
-      btn.innerHTML = '✅ Call on its way!';
-    } else {
-      throw new Error(data.detail || 'Something went wrong');
-    }
-  } catch(err){
-    status.className = 'error';
-    status.textContent = '❌ ' + err.message;
-    status.style.display = 'block';
-    btn.disabled = false;
-    btn.innerHTML = '<span class=\"phone-icon\">📞</span> Call Me Now — Talk to Abe';
-  }
-}
-</script>
-</body>
-</html>"""
-
-
-@app.get("/haf", response_class=HTMLResponse)
-def haf_demo():
-    """Honest Abe's Firewood client demo page — visitor enters phone, Abe calls back."""
-    return HTMLResponse(_HAF_HTML)

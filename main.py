@@ -168,7 +168,7 @@ async def refresh_widget_agents(force: bool = False) -> None:
 
 def line_ok(line: dict) -> bool:
     agent = (WIDGET_AGENT.get(line["widget"]) or {}).get("agent")
-    if agent is None:                                        # not known yet: assume it is set up right
+    if not agent:                                            # None or "" = not known / no voice agent: assume OK
         return True
     first = next((l for l in LINES if (WIDGET_AGENT.get(l["widget"]) or {}).get("agent") == agent), line)
     return agent == line["agent"] and first is line         # its own agent, not shared with an earlier line

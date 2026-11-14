@@ -626,7 +626,8 @@ async def train(req: TrainRequest, request: Request):
                     if data.get("description"):
                         brief_parts.append(data["description"])
                     if data.get("about"):
-                        brief_parts.append("About: " + data["about"])
+                        about = data["about"]
+                        brief_parts.append("About: " + (" ".join(about) if isinstance(about, list) else str(about)))
                     if data.get("services"):
                         brief_parts.append("Services/products: " + ", ".join(data["services"][:15]))
                     if data.get("highlights"):

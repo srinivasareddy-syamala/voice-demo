@@ -40,8 +40,7 @@ DEFAULT_WIDGET_ID = WIDGET_ID
 # queue ("Please wait, the line is busy") and is connected as soon as a line is free.
 # To add a line: duplicate the agent and the chat widget in GHL, point the new widget at the new agent, and add
 # the pair below - or put all pairs in .env as  GHL_LINES=agentId:widgetId,agentId:widgetId
-DEFAULT_LINES = [(os.getenv("GHL_AGENT_ID") or "6abdf3955deba8d1c1f3ac30", WIDGET_ID),
-                 ("6ac51060e7267112e69b5de7", "6ac51135f1d5945734fe5e9f")]
+DEFAULT_LINES = [(os.getenv("GHL_AGENT_ID") or "6abdf3955deba8d1c1f3ac30", WIDGET_ID)]
 LINE_HOLD = int(os.getenv("LINE_HOLD_SECONDS", "540"))     # with people waiting, a visitor keeps a line this long
 LINE_GRACE = int(os.getenv("LINE_GRACE_SECONDS", "90"))    # no sign of life from the page for this long = they left
 
@@ -150,7 +149,9 @@ async def refresh_widget_agents(force: bool = False) -> None:
     for line in LINES:
         w = WIDGET_AGENT.get(line["widget"])
         if force or not w or now - w["ts"] > 300:
-            WIDGET_AGENT[line["widget"]] = {"agent": await ghl.widget_voice_agent(line["widget"]), "ts": now}
+            agent_id = await ghl.widget_voice_agent(line["widget"])
+            WIDGET_AGENT[line["widget"]] = {"agent": agent_id, "ts": now}
+            print(f"[lines] widget {line['widget']} -> agent {agent_id!r} (widget config read)")
             changed = True
     if not changed:
         return
@@ -607,6 +608,7 @@ async def train(req: TrainRequest, request: Request):
                 async with line["lock"]:
                     try:
                         await ghl.update_voice_agent(prompt, welcome, line["agent"])
+                        print(f"[ghl] agent {line['agent']} updated — welcome: {welcome[:80]!r}")
                         return "updated"
                     except Exception as e:
                         print("[ghl]", e)

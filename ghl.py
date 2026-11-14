@@ -109,6 +109,24 @@ async def fill_company_name(contact_id: str, company_name: str) -> bool:
         return False
 
 
+async def set_contact_custom_field(contact_id: str, field_key: str, value: str) -> bool:
+    """PUT /contacts/{id} (scope: contacts.write). Sets a custom field on a GHL contact.
+    Passes customFields as an array with key + field_value. Never raises."""
+    if not contact_id:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.put(f"{BASE}/contacts/{contact_id}", headers=_headers("2021-07-28"),
+                            json={"customFields": [{"key": field_key, "field_value": value[:2000]}]})
+            if r.status_code >= 400:
+                print("[ghl] custom field not saved", r.status_code, r.text[:200])
+                return False
+            return True
+    except (httpx.HTTPError, ValueError) as e:
+        print("[ghl] custom field error", e)
+        return False
+
+
 async def add_note(contact_id: str, text: str) -> bool:
     """POST /contacts/{id}/notes (scope: contacts.write). Best effort."""
     if not contact_id:
@@ -239,11 +257,26 @@ async def widget_voice_agent(widget_id: str) -> str | None:
         if r.status_code != 200:
             return None
         text = r.text
+        # Try anchored search near "voice-ai-agent" first, then a broad agentId scan as fallback
         i = text.find("voice-ai-agent")
         if i < 0:
-            return ""
-        m = re.search(r'"agentId"\s*:\s*"([0-9a-fA-F]{24})"', text[i:i + 600])
-        return m.group(1) if m else ""
+            # Also try camelCase / underscore variants GHL may use
+            for key in ("voiceAiAgent", "voice_ai_agent", "voiceAgent", "Voice AI"):
+                i = text.find(key)
+                if i >= 0:
+                    break
+        if i >= 0:
+            m = re.search(r'"agentId"\s*:\s*"([0-9a-fA-F]{24})"', text[i:i + 600])
+            if m:
+                print(f"[ghl] widget {text[i:i+20]!r} -> agentId {m.group(1)}")
+                return m.group(1)
+        # Broad fallback: any agentId in the response (last resort — may be wrong if multiple exist)
+        all_ids = re.findall(r'"agentId"\s*:\s*"([0-9a-fA-F]{24})"', text)
+        if all_ids:
+            print(f"[ghl] widget agentId (broad scan): {all_ids[0]} (all found: {all_ids})")
+            return all_ids[0]
+        print(f"[ghl] widget config has no agentId (voice-ai-agent not found, len={len(text)})")
+        return ""
     except (httpx.HTTPError, ValueError) as e:
         print("[ghl] widget config error", e)
         return None

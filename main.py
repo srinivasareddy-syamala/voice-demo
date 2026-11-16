@@ -40,7 +40,7 @@ DEFAULT_WIDGET_ID = WIDGET_ID
 # queue ("Please wait, the line is busy") and is connected as soon as a line is free.
 # To add a line: duplicate the agent and the chat widget in GHL, point the new widget at the new agent, and add
 # the pair below - or put all pairs in .env as  GHL_LINES=agentId:widgetId,agentId:widgetId
-DEFAULT_LINES = [(os.getenv("GHL_AGENT_ID") or "6afab24c3cc3a65ff270f55c", WIDGET_ID)]
+DEFAULT_LINES = [(os.getenv("GHL_AGENT_ID") or "6abdf3955deba8d1c1f3ac30", WIDGET_ID)]
 LINE_HOLD = int(os.getenv("LINE_HOLD_SECONDS", "540"))     # with people waiting, a visitor keeps a line this long
 LINE_GRACE = int(os.getenv("LINE_GRACE_SECONDS", "90"))    # no sign of life from the page for this long = they left
 

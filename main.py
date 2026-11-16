@@ -626,20 +626,21 @@ async def train(req: TrainRequest, request: Request):
                 if isinstance(saved, dict) and saved.get("id") and not no_site:
                     brief_parts = []
                     if data.get("description"):
-                        brief_parts.append(data["description"])
+                        brief_parts.append(str(data["description"]))
                     if data.get("about"):
                         about = data["about"]
-                        brief_parts.append("About: " + (" ".join(about) if isinstance(about, list) else str(about)))
+                        parts = [str(x) for x in (about if isinstance(about, list) else [about])]
+                        brief_parts.append("About: " + " ".join(parts))
                     if data.get("services"):
-                        brief_parts.append("Services/products: " + ", ".join(data["services"][:15]))
+                        brief_parts.append("Services/products: " + ", ".join(str(s) for s in data["services"][:15]))
                     if data.get("highlights"):
-                        brief_parts.append("Key points: " + "; ".join(data["highlights"][:10]))
+                        brief_parts.append("Key points: " + "; ".join(str(h) for h in data["highlights"][:10]))
                     if data.get("address"):
-                        brief_parts.append("Address: " + data["address"])
+                        brief_parts.append("Address: " + str(data["address"]))
                     if data.get("phones"):
-                        brief_parts.append("Phone: " + ", ".join(data["phones"][:3]))
+                        brief_parts.append("Phone: " + ", ".join(str(p) for p in data["phones"][:3]))
                     if data.get("hours"):
-                        brief_parts.append("Hours: " + data["hours"])
+                        brief_parts.append("Hours: " + str(data["hours"]))
                     company_brief = "\n".join(brief_parts).strip()
                     if company_brief:
                         await ghl.set_contact_custom_field(saved["id"], "pragna_company_brief", company_brief)
@@ -652,7 +653,7 @@ async def train(req: TrainRequest, request: Request):
                     f"Description: {data.get('description') or '-'}\n"
                     f"Services: {services}\n"
                     f"Phones: {', '.join(data['phones']) or '-'} | Emails: {', '.join(data['emails']) or '-'}\n"
-                    f"Pages read: {len(data['pages_scraped'])}")
+                    f"Pages read: {len(data.get('pages_scraped') or [])}")
 
             agent_status, contact, preview, chat_status = await asyncio.gather(
                 update_agent(), guarded("contact note", save_contact(), None),

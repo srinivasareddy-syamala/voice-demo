@@ -29,7 +29,7 @@ async def update_voice_agent(prompt: str, welcome: str, agent_id: str = "") -> d
     body = {"agentPrompt": prompt, "welcomeMessage": welcome}
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.patch(url, params={"locationId": os.environ["GHL_LOCATION_ID"]},
-                          headers=_headers(os.getenv("GHL_VOICE_API_VERSION", "v3")), json=body)
+                          headers=_headers(os.getenv("GHL_VOICE_API_VERSION", "2021-07-28")), json=body)
         if r.status_code >= 400:
             raise RuntimeError(f"GHL agent update failed [{r.status_code}]: {r.text[:400]}")
         return r.json()
@@ -360,7 +360,7 @@ async def message_status(message_id: str) -> dict:
 
 # ---------------------------------------------------------------- voice agent actions (tools the agent can use in a call)
 def _voice_version() -> str:
-    return os.getenv("GHL_VOICE_API_VERSION", "v3")
+    return os.getenv("GHL_VOICE_API_VERSION", "2021-07-28")
 
 
 async def agent_actions(agent_id: str = "") -> list[dict] | None:

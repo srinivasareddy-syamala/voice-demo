@@ -305,17 +305,63 @@
   }
 
   /* ── Page 2: watch for the phone/iframe screen ─────────── */
+  /*
+   * FIX v4.4: The phone/iframe element is already in the DOM while the
+   * "Building your AI Receptionist..." progress bar is still showing.
+   * We must NOT show the guide until the AI is fully built and ready.
+   * Strategy:
+   *   1. Check that no "building / loading / almost ready" text is visible.
+   *   2. Check that the iframe has a real src (not empty/placeholder).
+   *   3. Only then show the phone guide.
+   */
+  function isStillBuilding() {
+    // Check for visible progress bar elements
+    var progressSelectors = [
+      '[class*="progress"]', '[class*="loading"]', '[class*="building"]',
+      '[class*="spinner"]', '[class*="loader"]'
+    ];
+    for (var i = 0; i < progressSelectors.length; i++) {
+      try {
+        var els = document.querySelectorAll(progressSelectors[i]);
+        for (var j = 0; j < els.length; j++) {
+          var s = window.getComputedStyle(els[j]);
+          if (s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0') {
+            return true;
+          }
+        }
+      } catch(e) {}
+    }
+    // Check for "building" / "almost ready" / "%" text on page
+    var bodyText = (document.body && document.body.innerText) ? document.body.innerText.toLowerCase() : '';
+    if (bodyText.indexOf('building your ai') !== -1 ||
+        bodyText.indexOf('almost ready') !== -1 ||
+        bodyText.indexOf('getting ready') !== -1) {
+      return true;
+    }
+    return false;
+  }
+
   function watchForDemoScreen() {
     var timer = setInterval(function () {
+      // Don't proceed while AI is still being built
+      if (isStillBuilding()) return;
+
       var phoneEl = document.getElementById('pv') ||
                     document.querySelector('.phone-row iframe') ||
                     document.querySelector('.phone-row');
+
+      // Also ensure the iframe has a real src (not a placeholder)
+      if (phoneEl && phoneEl.tagName === 'IFRAME') {
+        var src = phoneEl.getAttribute('src') || '';
+        if (!src || src === '' || src === 'about:blank') return;
+      }
+
       if (phoneEl) {
         clearInterval(timer);
-        setTimeout(function () { showPhoneGuide(phoneEl); }, 1200);
+        setTimeout(function () { showPhoneGuide(phoneEl); }, 1500);
       }
     }, 1000);
-    setTimeout(function () { clearInterval(timer); }, 90000);
+    setTimeout(function () { clearInterval(timer); }, 120000);
   }
 
   /* ── Page 2: phone/widget instruction ─────────────────── */

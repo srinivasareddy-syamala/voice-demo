@@ -446,7 +446,7 @@
 
   /* ── Auto-start ───────────────────────────────────────── */
   function tryStart() {
-    setTimeout(highlightSubmitButton, 1500);
+    setTimeout(highlightSubmitButton, 3000);
   }
 
   if (document.readyState === 'complete') {

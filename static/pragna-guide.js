@@ -322,15 +322,33 @@
   }
 
   /* ── Watch for "line is busy" state ───────────────────── */
+  /*
+   * FIX v4.1: GHL widget can show #busyTitle as visible right on page load
+   * (before the user even taps "Chat with Voice"). We snapshot its visibility
+   * when we start watching; we only fire the banner if it was HIDDEN when we
+   * started and later becomes VISIBLE — meaning the user attempted a call and
+   * hit a busy line, not a pre-existing busy state.
+   */
+  function isBusyVisible() {
+    var el = document.getElementById('busyTitle');
+    if (!el) return false;
+    var s = window.getComputedStyle(el);
+    return s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
+  }
+
   function watchForBusyState() {
+    // If already busy when we start → wait for it to clear first,
+    // then watch for it becoming busy again (user triggered a new attempt).
+    var wasAlreadyBusy = isBusyVisible();
+
     var busyTimer = setInterval(function () {
-      var busyTitle = document.getElementById('busyTitle');
-      if (busyTitle) {
-        var style = window.getComputedStyle(busyTitle);
-        var isVisible = style.display !== 'none' &&
-                        style.visibility !== 'hidden' &&
-                        style.opacity !== '0';
-        if (isVisible) {
+      var nowBusy = isBusyVisible();
+      if (wasAlreadyBusy) {
+        // Wait for it to clear
+        if (!nowBusy) { wasAlreadyBusy = false; }
+      } else {
+        // Was clear — if it just became busy, show the banner
+        if (nowBusy) {
           clearInterval(busyTimer);
           showBusyBanner();
         }

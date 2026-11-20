@@ -23,7 +23,7 @@ ACTION_CHANGE = "Change appointment time"
 ACTION_CANCEL = "Cancel appointment"
 
 _ASK = ('- As soon as {contact_name} sounds interested (asks about price, setup, how to get this on their own site, next steps, '
-        'or says they like it), and in any case before the call ends, ask: "Would you like to book an appointment with the '
+        'or says they like it), offer once to book an appointment (ask this only once — if they decline or change the subject, do not raise it again): "Would you like to book an appointment with the '
         '{brand_name} team to get this set up for {company_name}?"\n'
         '- If {contact_name} asks for an appointment at any point, even in their very first sentence and before any other '
         'talk, do it straight away: do not wait for them to sound interested and do not ask whether they are interested.')

@@ -1,5 +1,5 @@
 /* ============================================================
-   Pragna AI Demo – Guided Overlay  v2
+   Pragna AI Demo – Guided Overlay  v3
    ============================================================ */
 
 (function () {
@@ -94,6 +94,9 @@
       position: absolute; top: 8px; right: 12px;
       background: none; border: none; color: #64748b; font-size: 18px; cursor: pointer;
     }
+    .pg-phone-highlight {
+      border-radius: 24px !important;
+    }
   `;
   const styleEl = document.createElement('style');
   styleEl.textContent = css;
@@ -108,7 +111,7 @@
     return Math.min(Math.max(val, min), max);
   }
 
-  function positionHighlight(el, padding) {
+  function positionHighlight(el, padding, extraClass) {
     padding = padding || 10;
     const r = getRect(el);
     const top  = clamp(r.top  - padding, 4, window.innerHeight - 20);
@@ -117,6 +120,8 @@
     highlight.style.left   = left + 'px';
     highlight.style.width  = (r.width  + padding * 2) + 'px';
     highlight.style.height = (r.height + padding * 2) + 'px';
+    if (extraClass) highlight.classList.add(extraClass);
+    else highlight.classList.remove('pg-phone-highlight');
   }
 
   function positionTooltip(el, side) {
@@ -125,11 +130,11 @@
     const tw = 290, margin = 16;
     let left, top;
     if (side === 'right') {
-      left = r.left + r.width + margin;
+      left = r.right + margin;
       top  = r.top;
     } else if (side === 'bottom') {
       left = r.left;
-      top  = r.top + r.height + margin;
+      top  = r.bottom + margin;
     } else if (side === 'left') {
       left = r.left - tw - margin;
       top  = r.top;
@@ -137,11 +142,11 @@
       left = r.left;
       top  = r.top - 180;
     }
-    // Clamp so tooltip stays inside viewport
     left = clamp(left, 8, window.innerWidth  - tw - 8);
     top  = clamp(top,  8, window.innerHeight - 220);
     tooltip.style.left = left + 'px';
     tooltip.style.top  = top  + 'px';
+    tooltip.style.transform = '';
   }
 
   function positionArrow(el, direction) {
@@ -217,8 +222,6 @@
     },
   ];
 
-  let currentStep = 0;
-
   function findEl(selector) {
     const parts = selector.split(',').map(s => s.trim());
     for (const s of parts) {
@@ -250,7 +253,6 @@
       positionTooltip(el, window.innerWidth > 600 ? 'right' : 'bottom');
 
       const r = getRect(el);
-      // Only show arrow if there's room above the element
       if (r.top > 70) {
         arrow.style.display = 'flex';
         positionArrow(el, 'down');
@@ -282,14 +284,12 @@
     }, 500);
   }
 
-  /* ── Intro tooltip (centered, no form highlight) ──────── */
+  /* ── Intro tooltip (centered) ─────────────────────────── */
   function startGuide() {
-    // Show a fixed-center intro before stepping through fields
     highlight.style.display = 'none';
     arrow.style.display     = 'none';
     tooltip.style.display   = 'block';
 
-    // Center the tooltip on screen
     tooltip.style.left = '50%';
     tooltip.style.top  = '50%';
     tooltip.style.transform = 'translate(-50%, -50%)';
@@ -316,88 +316,159 @@
   }
 
   /* ── Watch for the demo (phone mockup) screen ─────────── */
+  /*
+   * FIX v3: "Chat with Voice" is inside <iframe id="pv"> (cross-origin).
+   * We CANNOT access its DOM from the parent page.
+   * Detect the iframe/phone container and highlight the whole phone area,
+   * telling the user to tap "Chat with Voice" inside it themselves.
+   */
   function watchForDemoScreen() {
     var timer = setInterval(function () {
-      var chatBtn = findEl(
-        '[class*="voice" i] button, [class*="chat" i] button, ' +
-        'button[class*="call" i], button[class*="voice" i], ' +
-        '[class*="phone" i] button, [class*="demo" i] button, ' +
-        '[data-testid*="voice"], [class*="mic" i]'
-      );
-      if (chatBtn) {
+      var phoneEl = document.getElementById('pv') ||
+                    document.querySelector('.phone-row iframe') ||
+                    document.querySelector('.phone-row');
+      if (phoneEl) {
         clearInterval(timer);
-        setTimeout(function () { showCallGuide(chatBtn); }, 800);
+        setTimeout(function () { showPhoneGuide(phoneEl); }, 1200);
       }
     }, 1000);
     setTimeout(function () { clearInterval(timer); }, 90000);
   }
 
-  /* ── Call button guide ────────────────────────────────── */
-  function showCallGuide(callBtn) {
-    callBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  /* ── Phone mockup guide ───────────────────────────────── */
+  function showPhoneGuide(phoneEl) {
+    phoneEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
     setTimeout(function () {
       highlight.style.display = 'block';
       tooltip.style.display   = 'block';
 
-      positionHighlight(callBtn, 16);
-      positionTooltip(callBtn, 'bottom');
+      positionHighlight(phoneEl, 8, 'pg-phone-highlight');
+      positionTooltip(phoneEl, window.innerWidth > 600 ? 'right' : 'bottom');
 
-      const r = getRect(callBtn);
+      const r = getRect(phoneEl);
       if (r.top > 70) {
         arrow.style.display = 'flex';
-        positionArrow(callBtn, 'down');
+        positionArrow(phoneEl, 'down');
       } else {
         arrow.style.display = 'none';
       }
 
       var ring = document.createElement('div');
       ring.className = 'pg-pulse-ring';
-      var cr = getRect(callBtn);
-      var size = Math.max(cr.width, cr.height) + 20;
-      ring.style.cssText = 'width:' + size + 'px;height:' + size + 'px;top:' + (cr.top + cr.height/2 - size/2) + 'px;left:' + (cr.left + cr.width/2 - size/2) + 'px';
+      ring.id = 'pg-phone-ring';
+      var size = Math.max(r.width, r.height) + 24;
+      ring.style.cssText = 'width:' + size + 'px;height:' + size + 'px;border-radius:24px' +
+        ';top:' + (r.top + r.height/2 - size/2) + 'px' +
+        ';left:' + (r.left + r.width/2 - size/2) + 'px';
       document.body.appendChild(ring);
 
       tooltip.innerHTML = `
-        <div class="pg-title">🎙️ Talk to Your AI!</div>
-        <div>Tap <strong>"Chat with Voice"</strong>, allow microphone access, then say hello!<br><br>Ask anything about your business — your AI already knows everything!</div>
-        <button class="pg-btn" id="pg-call-ok">Let's Talk! 🚀</button>
+        <div class="pg-title">🎙️ Your AI is Ready!</div>
+        <div>Look inside the phone screen.<br><br>
+        👆 Tap <strong>"Chat with Voice"</strong> in the widget.<br><br>
+        When prompted, <strong>allow microphone access</strong>, then say hello — your AI knows your business!</div>
+        <button class="pg-btn" id="pg-call-ok">Got it! Let's Talk 🚀</button>
         <button class="pg-btn-skip" id="pg-call-skip">Skip</button>
       `;
 
       document.getElementById('pg-call-ok').onclick = function () {
-        hideAll(); ring.remove(); callBtn.click(); watchForCallEnd();
+        hideAll(); ring.remove();
+        watchForBusyState();
+        watchForCallEnd();
       };
       document.getElementById('pg-call-skip').onclick = function () {
-        hideAll(); ring.remove(); watchForCallEnd();
+        hideAll(); ring.remove();
+        watchForBusyState();
+        watchForCallEnd();
       };
     }, 500);
+  }
+
+  /* ── Watch for "line is busy" state ──────────────────── */
+  function watchForBusyState() {
+    var busyTimer = setInterval(function () {
+      var busyTitle = document.getElementById('busyTitle');
+      if (busyTitle) {
+        var style = window.getComputedStyle(busyTitle);
+        var isVisible = style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        style.opacity !== '0';
+        if (isVisible) {
+          clearInterval(busyTimer);
+          showBusyBanner();
+        }
+      }
+    }, 1500);
+    setTimeout(function () { clearInterval(busyTimer); }, 300000);
+  }
+
+  /* ── Busy state banner ────────────────────────────────── */
+  function showBusyBanner() {
+    if (document.getElementById('pg-busy-banner')) return;
+
+    var banner = document.createElement('div');
+    banner.id = 'pg-busy-banner';
+    banner.className = 'pg-appt-banner';
+    banner.style.borderColor = '#f59e0b';
+    banner.innerHTML = `
+      <button class="pg-close-banner" id="pg-close-busy">×</button>
+      <div class="pg-appt-icon">⏳</div>
+      <div class="pg-appt-text">
+        <strong style="color:#f59e0b">All lines are busy right now</strong>
+        You're in the queue — keep this page open and you'll connect automatically!
+      </div>
+      <button class="pg-appt-btn" style="background:#f59e0b;color:#0f172a" id="pg-busy-book">Book a Call Instead →</button>
+    `;
+    document.body.appendChild(banner);
+
+    document.getElementById('pg-close-busy').onclick = function () { banner.remove(); };
+    document.getElementById('pg-busy-book').onclick = function () {
+      banner.remove();
+      window.open('https://links.pragna.ai/widget/bookings/srinivas-reddy-personal-calendar-e6vsub-lv', '_blank');
+    };
+
+    setTimeout(function () {
+      var b = document.getElementById('pg-busy-banner');
+      if (b) b.remove();
+    }, 30000);
   }
 
   /* ── Watch for call end → show appointment banner ─────── */
   function watchForCallEnd() {
     var timer = setInterval(function () {
-      var endNotice = findEl(
-        '[class*="session" i], [class*="ended" i], ' +
-        'button[class*="again" i], [class*="after-hours" i]'
-      );
-      if (endNotice) {
+      var allBtns = document.querySelectorAll('button');
+      var startAgain = null;
+      for (var i = 0; i < allBtns.length; i++) {
+        if (allBtns[i].textContent.trim().toLowerCase().indexOf('start again') !== -1) {
+          var s = window.getComputedStyle(allBtns[i]);
+          if (s.display !== 'none' && s.visibility !== 'hidden') {
+            startAgain = allBtns[i];
+            break;
+          }
+        }
+      }
+      if (startAgain) {
         clearInterval(timer);
         setTimeout(showAppointmentBanner, 1500);
       }
-    }, 1500);
-    setTimeout(function () { clearInterval(timer); }, 300000);
+    }, 2000);
+    setTimeout(function () { clearInterval(timer); }, 600000);
   }
 
   /* ── Appointment banner ───────────────────────────────── */
   function showAppointmentBanner() {
-    var bookBtn = findEl('[class*="book" i], button[class*="appoint" i], a[href*="book" i], a[href*="appoint" i]');
+    var bookBtn = document.getElementById('bookBtn') ||
+                  findEl('.bookbtn, [class*="book" i] button, a[href*="book" i]');
+
     if (bookBtn) {
       bookBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      positionHighlight(bookBtn, 12);
-      highlight.style.display = 'block';
-      var r = getRect(bookBtn);
-      if (r.top > 70) { arrow.style.display = 'flex'; positionArrow(bookBtn, 'down'); }
+      setTimeout(function () {
+        positionHighlight(bookBtn, 12);
+        highlight.style.display = 'block';
+        var r = getRect(bookBtn);
+        if (r.top > 70) { arrow.style.display = 'flex'; positionArrow(bookBtn, 'down'); }
+      }, 400);
     }
 
     var banner = document.createElement('div');

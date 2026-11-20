@@ -115,10 +115,53 @@
 
   [highlight, tooltip, arrow].forEach(function(el) { document.body.appendChild(el); });
 
+  /* ── Scroll tracking ─────────────────────────────────── */
+  var _trackedEl   = null;   // element currently highlighted
+  var _trackedPad  = 10;
+  var _trackedExtraCls = null;
+  var _trackedSide = 'right';
+  var _trackedArrowDir = 'down';
+  var _scrollRAF   = null;
+
+  function _updatePositions() {
+    if (!_trackedEl) return;
+    positionHighlight(_trackedEl, _trackedPad, _trackedExtraCls);
+    positionTooltip(_trackedEl, window.innerWidth > 600 ? _trackedSide : 'bottom');
+    var r = getRect(_trackedEl);
+    if (r.top > 70 && r.bottom > 0 && r.top < window.innerHeight) {
+      arrow.style.display = 'flex';
+      positionArrow(_trackedEl, _trackedArrowDir);
+    } else {
+      arrow.style.display = 'none';
+    }
+  }
+
+  function _onScroll() {
+    if (_scrollRAF) cancelAnimationFrame(_scrollRAF);
+    _scrollRAF = requestAnimationFrame(_updatePositions);
+  }
+
+  function trackElement(el, pad, extraCls, side, arrowDir) {
+    _trackedEl      = el;
+    _trackedPad     = pad  || 10;
+    _trackedExtraCls= extraCls || null;
+    _trackedSide    = side || 'right';
+    _trackedArrowDir= arrowDir || 'down';
+    window.addEventListener('scroll', _onScroll, { passive: true });
+    window.addEventListener('resize', _onScroll, { passive: true });
+  }
+
+  function stopTracking() {
+    _trackedEl = null;
+    window.removeEventListener('scroll', _onScroll);
+    window.removeEventListener('resize', _onScroll);
+  }
+
   function hideAll() {
     highlight.style.display = 'none';
     tooltip.style.display   = 'none';
     arrow.style.display     = 'none';
+    stopTracking();
   }
   hideAll();
 
@@ -230,6 +273,9 @@
         arrow.style.display = 'none';
       }
 
+      // Keep highlight locked to button as user scrolls
+      trackElement(submitEl, 10, null, 'right', 'down');
+
       tooltip.innerHTML =
         '<div class="pg-title">🚀 Ready? Build Your AI!</div>' +
         '<div>Fill in the form above, then click this button.<br><br>' +
@@ -290,6 +336,9 @@
       } else {
         arrow.style.display = 'none';
       }
+
+      // Keep highlight locked to phone widget as user scrolls
+      trackElement(phoneEl, 8, 'pg-phone-highlight', 'right', 'down');
 
       var ring = document.createElement('div');
       ring.className = 'pg-pulse-ring';

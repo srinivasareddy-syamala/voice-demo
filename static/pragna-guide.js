@@ -388,22 +388,41 @@
   }
 
   /* ── Watch for call end → show appointment banner ─────── */
-  function watchForCallEnd() {
-    var timer = setInterval(function () {
-      var allBtns = document.querySelectorAll('button');
-      var startAgain = null;
-      for (var i = 0; i < allBtns.length; i++) {
-        if (allBtns[i].textContent.trim().toLowerCase().indexOf('start again') !== -1) {
-          var s = window.getComputedStyle(allBtns[i]);
-          if (s.display !== 'none' && s.visibility !== 'hidden') {
-            startAgain = allBtns[i];
-            break;
-          }
+  /*
+   * FIX v4.2: "start again" / end-of-call button may already be visible in
+   * the GHL widget when page 2 loads (previous session state). We snapshot
+   * its presence at watch-start; we only fire the banner if it was ABSENT
+   * and newly appears — meaning the user actually completed a call or chat.
+   */
+  function findStartAgainBtn() {
+    var allBtns = document.querySelectorAll('button');
+    for (var i = 0; i < allBtns.length; i++) {
+      var txt = allBtns[i].textContent.trim().toLowerCase();
+      if (txt.indexOf('start again') !== -1 || txt.indexOf('end call') !== -1 || txt.indexOf('call ended') !== -1) {
+        var s = window.getComputedStyle(allBtns[i]);
+        if (s.display !== 'none' && s.visibility !== 'hidden') {
+          return allBtns[i];
         }
       }
-      if (startAgain) {
-        clearInterval(timer);
-        setTimeout(showAppointmentBanner, 1500);
+    }
+    return null;
+  }
+
+  function watchForCallEnd() {
+    // Snapshot: if end-of-call button already visible, wait for it to clear first
+    var wasAlreadyEnded = !!findStartAgainBtn();
+
+    var timer = setInterval(function () {
+      var btn = findStartAgainBtn();
+      if (wasAlreadyEnded) {
+        // Wait for the stale state to clear
+        if (!btn) { wasAlreadyEnded = false; }
+      } else {
+        // Was clear — if it newly appears, user just finished a call/chat
+        if (btn) {
+          clearInterval(timer);
+          setTimeout(showAppointmentBanner, 1500);
+        }
       }
     }, 2000);
     setTimeout(function () { clearInterval(timer); }, 600000);

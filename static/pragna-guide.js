@@ -534,39 +534,41 @@
     setTimeout(function () { clearInterval(timer); }, 600000);
   }
 
-  /* ── Appointment banner (after call ends) ─────────────── */
+  /* ── Appointment modal (after call/chat ends) ────────────────
+   * Shows a centred overlay with the booking calendar embedded
+   * as an iframe so the user can book without leaving the page.
+   * ──────────────────────────────────────────────────── */
   function showAppointmentBanner() {
-    var bookBtn = document.getElementById('bookBtn') ||
-                  findEl('.bookbtn, [class*="book" i] button, a[href*="book" i]');
+    if (document.getElementById('pg-booking-overlay')) return;
 
-    if (bookBtn) {
-      bookBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      setTimeout(function () {
-        positionHighlight(bookBtn, 12);
-        highlight.style.display = 'block';
-        var r = getRect(bookBtn);
-        if (r.top > 70) { arrow.style.display = 'flex'; positionArrow(bookBtn, 'down'); }
-      }, 400);
+    var overlay = document.createElement('div');
+    overlay.className = 'pg-booking-overlay';
+    overlay.id = 'pg-booking-overlay';
+
+    overlay.innerHTML =
+      '<div class="pg-booking-modal">' +
+        '<div class="pg-booking-modal-header">' +
+          '<span class="pg-booking-modal-title">📅 Book a Free Consultation</span>' +
+          '<button class="pg-booking-modal-close" id="pg-booking-close">×</button>' +
+        '</div>' +
+        '<div class="pg-booking-modal-sub">Liked what you heard? Book a quick free call — we\'ll set this up for your business.</div>' +
+        '<iframe src="https://links.pragna.ai/widget/bookings/srinivas-reddy-personal-calendar-e6vsub-lv" ' +
+                'allow="camera; microphone; fullscreen" loading="lazy"></iframe>' +
+      '</div>';
+
+    document.body.appendChild(overlay);
+
+    function closeModal() {
+      var o = document.getElementById('pg-booking-overlay');
+      if (o) o.remove();
     }
 
-    var banner = document.createElement('div');
-    banner.className = 'pg-appt-banner';
-    banner.innerHTML =
-      '<button class="pg-close-banner" id="pg-close-appt">×</button>' +
-      '<div class="pg-appt-icon">📅</div>' +
-      '<div class="pg-appt-text">' +
-        '<strong>Book a Free Consultation!</strong>' +
-        'Want this AI for your business? Book a quick call with our team — it\'s free!' +
-      '</div>' +
-      '<button class="pg-appt-btn" id="pg-appt-book">Book Now →</button>';
-    document.body.appendChild(banner);
+    document.getElementById('pg-booking-close').onclick = closeModal;
 
-    document.getElementById('pg-close-appt').onclick = function () { banner.remove(); hideAll(); };
-    document.getElementById('pg-appt-book').onclick = function () {
-      banner.remove(); hideAll();
-      if (bookBtn) { bookBtn.click(); }
-      else { window.open('https://links.pragna.ai/widget/bookings/srinivas-reddy-personal-calendar-e6vsub-lv', '_blank'); }
-    };
+    // Click outside modal box also closes
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) closeModal();
+    });
   }
 
   /* ── Auto-start ───────────────────────────────────────── */

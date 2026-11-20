@@ -286,6 +286,17 @@
         hideAll();
       };
 
+      // Clicking anywhere outside the tooltip dismisses it
+      setTimeout(function () {
+        function onOutsideClick(e) {
+          if (!tooltip.contains(e.target)) {
+            hideAll();
+            document.removeEventListener('click', onOutsideClick, true);
+          }
+        }
+        document.addEventListener('click', onOutsideClick, true);
+      }, 300); // short delay so this click doesn't immediately fire
+
       // When user clicks submit, watch for second page
       submitEl.addEventListener('click', function () {
         hideAll();

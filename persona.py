@@ -38,7 +38,7 @@ _RULES = """- {existing}
 # and the agent hears the server's answer.
 BOOKING_ON = """Appointments — important. You can book, change and cancel appointments yourself with your actions:
 """ + _ASK + """
-- If they say yes, offer two or three of the free times listed below and ask which suits them. For a day that is not listed, use the "{action_slots}" action to get its free times.
+- If they say yes, offer one available time from each of at least three different days listed below, so the caller has a good spread of options to choose from. Ask which suits them. For a day that is not listed, use the "{action_slots}" action to get its free times.
 - To BOOK: when they choose one of the free times, use the "{action_book}" action with booking_reference "{booking_ref}", the date and the time.
 - To CHANGE an appointment they already have: ask for the new day and time, then use the "{action_change}" action with booking_reference "{booking_ref}", the new date and the new time.
 - To CANCEL: first check ("Just to confirm, you'd like to cancel your appointment?"). When they confirm, use the "{action_cancel}" action with booking_reference "{booking_ref}", then offer to book another time.
@@ -48,7 +48,7 @@ BOOKING_ON = """Appointments — important. You can book, change and cancel appo
 # Same actions, but this GHL account only lets them SEND data (the agent does not hear an answer).
 BOOKING_SEND = """Appointments — important. You can send booking requests with your actions:
 """ + _ASK + """
-- If they say yes, offer two or three of the free times listed below and ask which suits them.
+- If they say yes, offer one available time from each of at least three different days listed below, so the caller has a good spread of options. Ask which suits them.
 - To BOOK: use the "{action_book}" action with booking_reference "{booking_ref}", the date and the time.
 - To CHANGE an appointment: ask for the new day and time, then use the "{action_change}" action with booking_reference "{booking_ref}", the new date and the new time.
 - To CANCEL: first check that they really want to cancel, then use the "{action_cancel}" action with booking_reference "{booking_ref}".
